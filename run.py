@@ -1,14 +1,16 @@
 """Run the whole pipeline. From this folder:
 
-    python run.py validate   test the models on the last six months of sales
-    python run.py report     score those predictions and draw a figure
+    python run.py validate [--experiment NAME]   test models in an isolated run folder
+    python run.py report [--experiment NAME]     score an experiment and draw its figure
     python run.py predict    predict the test homes and write the two submission files
     python run.py check      check the submission files before you hand them in
 
 On Windows, type py instead of python if python is not found.
 """
 import json
+import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -25,7 +27,11 @@ TRACKS = ["off_market", "list_aware"]
 VALIDATION_MONTHS = pd.period_range("2025-12", "2026-05", freq="M")
 
 
-def validate():
+def validate(experiment=None):
+    experiment = experiment or datetime.now().strftime("run-%Y%m%d-%H%M%S-%f")
+    output_dir = experiment_dir(experiment)
+    if output_dir.exists():
+        raise FileExistsError(f"Experiment '{experiment}' already exists; choose a new name.")
     listings = data.load("listings")
     results = []
     for month in VALIDATION_MONTHS:
@@ -39,9 +45,10 @@ def validate():
                 "house_type_name": homes["house_type_name"], "sold_price": homes["sold_price"],
                 "predicted_price": np.round(predicted)}))
         print(f"{month}: trained on {len(train):,} earlier sales, predicted {len(homes):,} homes")
-    path = ROOT / "outputs" / "validation_predictions.csv"
-    path.parent.mkdir(exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=False)
+    path = output_dir / "validation_predictions.csv"
     pd.concat(results).to_csv(path, index=False)
+    print(f"Experiment: {experiment}")
     print(f"Wrote {path.relative_to(ROOT)}")
 
 
@@ -67,15 +74,18 @@ def metrics(predictions):
     }
 
 
-def report():
-    path = ROOT / "outputs" / "validation_predictions.csv"
+def report(experiment=None):
+    experiment = experiment or latest_experiment()
+    output_dir = experiment_dir(experiment)
+    path = output_dir / "validation_predictions.csv"
     if not path.exists():
-        sys.exit(f"{path} does not exist yet: run `python run.py validate` first")
+        sys.exit(f"{path} does not exist yet: run `python run.py validate --experiment {experiment}` first")
     predictions = pd.read_csv(path)
     scores = {track: metrics(predictions[predictions["track"] == track]) for track in TRACKS}
 
-    (ROOT / "reports").mkdir(exist_ok=True)
-    (ROOT / "reports" / "validation_report.json").write_text(json.dumps(scores, indent=2))
+    reports_dir = output_dir / "reports"
+    reports_dir.mkdir(exist_ok=True)
+    (reports_dir / "validation_report.json").write_text(json.dumps(scores, indent=2))
     lines = [
         "# Validation report", "",
         f"Walk-forward validation, {VALIDATION_MONTHS[0]} to {VALIDATION_MONTHS[-1]}: each month was "
@@ -92,15 +102,15 @@ def report():
         "The intervals treat homes as independent. Homes sold in the same month share the same",
         "market swings, so the real uncertainty is somewhat wider.", "",
         "![Error by price range](../figures/error_by_price_range.png)", ""]
-    (ROOT / "reports" / "validation_report.md").write_text("\n".join(lines))
-    write_latex_table(scores)
-    error_by_price_range(predictions)
+    (reports_dir / "validation_report.md").write_text("\n".join(lines))
+    write_latex_table(scores, reports_dir)
+    figure_path = error_by_price_range(predictions, output_dir / "figures")
     print("\n".join(lines))
-    print("Wrote reports/validation_report.md, reports/validation_report.json, reports/results_table.tex "
-          "and figures/error_by_price_range.png")
+    print(f"Experiment: {experiment}")
+    print(f"Wrote {reports_dir.relative_to(ROOT)} and {figure_path.relative_to(ROOT)}")
 
 
-def write_latex_table(scores):
+def write_latex_table(scores, reports_dir):
     """The same scores as a LaTeX table, for report/report.tex to include."""
     rows = []
     for track, s in scores.items():
@@ -113,10 +123,10 @@ def write_latex_table(scores):
         "\\begin{tabular}{lrccc}", "\\hline",
         "Track & Homes & MdAPE \\% (95\\% CI) & MAPE \\% (95\\% CI) & Median signed error \\% \\\\", "\\hline",
         *rows, "\\hline", "\\end{tabular}"])
-    (ROOT / "reports" / "results_table.tex").write_text(table + "\n")
+    (reports_dir / "results_table.tex").write_text(table + "\n")
 
 
-def error_by_price_range(predictions):
+def error_by_price_range(predictions, figures_dir):
     """Figure: how big the errors are, from the cheapest tenth of homes to the dearest.
 
     Want more figures? Copy this function and group the errors by something else:
@@ -145,9 +155,31 @@ def error_by_price_range(predictions):
     ax.spines[["top", "right"]].set_visible(False)
     ax.legend(frameon=False)
     fig.tight_layout()
-    (ROOT / "figures").mkdir(exist_ok=True)
-    fig.savefig(ROOT / "figures" / "error_by_price_range.png", dpi=150)
+    figures_dir.mkdir(exist_ok=True)
+    path = figures_dir / "error_by_price_range.png"
+    fig.savefig(path, dpi=150)
     plt.close(fig)
+    return path
+
+
+def experiment_dir(experiment, create=False):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", experiment):
+        raise ValueError("Experiment names must start with a letter or number and contain only letters, numbers, '_' or '-'.")
+    path = ROOT / "outputs" / "experiments" / experiment
+    if create:
+        path.mkdir(parents=True, exist_ok=False)
+    return path
+
+
+def latest_experiment():
+    root = ROOT / "outputs" / "experiments"
+    experiments = sorted(
+        (path for path in root.iterdir() if path.is_dir() and (path / "validation_predictions.csv").exists()),
+        key=lambda path: (path / "validation_predictions.csv").stat().st_mtime,
+    ) if root.exists() else []
+    if not experiments:
+        sys.exit("No experiment predictions found: run `python run.py validate` first")
+    return experiments[-1].name
 
 
 def predict():
@@ -169,7 +201,19 @@ def check():
 COMMANDS = {"validate": validate, "report": report, "predict": predict, "check": check}
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1] not in COMMANDS:
+    if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
         sys.exit(__doc__)
-    result = COMMANDS[sys.argv[1]]()
+    command = sys.argv[1]
+    if command in {"predict", "check"} and len(sys.argv) != 2:
+        sys.exit(__doc__)
+    if command in {"validate", "report"}:
+        if len(sys.argv) == 2:
+            experiment = None
+        elif len(sys.argv) == 4 and sys.argv[2] == "--experiment":
+            experiment = sys.argv[3]
+        else:
+            sys.exit(f"Usage: python run.py {command} [--experiment NAME]")
+        result = COMMANDS[command](experiment)
+    else:
+        result = COMMANDS[command]()
     sys.exit(1 if result is False else 0)

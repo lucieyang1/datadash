@@ -26,19 +26,41 @@ Prefer R? See `r/baseline.R`.
 ## Commands
 
 ```
-python run.py validate   # test on Dec 2025 to May 2026
-python run.py report     # results table and a figure
+python run.py validate --experiment baseline-v1   # test on Dec 2025 to May 2026
+python run.py report --experiment baseline-v1     # results table and a figure
 python run.py predict    # write both submission files
 python run.py check      # check them
 ```
+
+Each validation experiment is saved under
+`outputs/experiments/<name>/` with its own predictions, report, and figure.
+Experiment names must be unique; validation will stop rather than overwrite an
+existing experiment. Omit `--experiment NAME` to create a timestamped experiment;
+`python run.py report` then reports the most recently validated experiment.
 
 On Windows, use `py` if `python` is not found.
 
 ## What to edit
 
 - **`features.py`**: the features.
-- **`models.py`**: the models. Two simple baselines to beat: list price (list-aware) and the
-  10 nearest earlier sales (off-market). `FeatureModel` (gradient-boosted trees) is ready to switch on.
+- **`models.py`**: set `MODEL` to `"baseline"`, `"feature"`, `"spatiotemporal_gam"`, or `"xgboost"` to choose a model.
+  The GAM-style model mirrors the supplied `mgcv::bam` formula with spline bases and Ridge
+  regularization; it approximates, but does not reproduce, `bam`'s REML smoothness selection.
+  XGBoost uses the same property, location, and time inputs and adds list price on the
+  list-aware track. Its remarks features include binary presence flags for the
+  strongest generic words from `analyze_words.py`; location names are omitted because
+  the model already has community and municipality categories.
+
+To compare XGBoost, set `MODEL = "xgboost"` and run
+`python run.py validate --experiment xgboost-v1`, then
+`python run.py report --experiment xgboost-v1`.
+
+To explore which words in listing remarks are associated with higher or lower
+prices after controlling for the structured property, location, and time features,
+run `python analyze_words.py`. It prints the 20 highest and lowest word
+associations and saves all results to `outputs/word_associations.csv`. These are
+exploratory associations, not causal effects or proof that adding text will
+improve validation accuracy.
 
 ## Validation
 

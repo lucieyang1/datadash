@@ -1,0 +1,595 @@
+---
+title: "eda"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+library(readr)
+```
+
+```{r}
+listings <- read.csv("../data/listings.csv")
+test_list_aware <- read.csv("../data/test_list_aware.csv")
+test_off_market <- read.csv("../data/test_off_market.csv")
+```
+
+```{r}
+summary(listings)
+```
+```{r}
+ggplot(listings, aes(longitude, latitude, colour = municipality)) +
+  geom_point(alpha = 0.6, size = 1) +
+  coord_equal() 
+```
+
+```{r}
+library(sf)
+library(spdep)
+library(dplyr)
+
+# Keep complete observations
+d <- listings |>
+  filter(
+    !is.na(longitude),
+    !is.na(latitude),
+    !is.na(list_price),
+    list_price > 0
+  )
+
+# Convert coordinates to a projected CRS in metres
+pts <- st_as_sf(
+  d,
+  coords = c("longitude", "latitude"),
+  crs = 4326
+) |>
+  st_transform(26917)
+
+coords <- st_coordinates(pts)
+
+# Define each listing's 8 nearest neighbours
+knn <- knearneigh(coords, k = 8)
+nb <- knn2nb(knn)
+lw <- nb2listw(nb, style = "W")
+
+# Test for spatial autocorrelation in prices
+moran.mc(
+  log(d$list_price),
+  lw,
+  nsim = 999
+)
+```
+there is spatial autocorrelation!
+
+```{r}
+plot(listings$longitude, listings$list_price)
+```
+
+```{r}
+x <- log(d$list_price)
+
+# Local Moran's I
+local_moran <- localmoran(
+  x,
+  lw,
+  zero.policy = TRUE
+)
+
+# Add results to the data
+d_lisa <- d |>
+  mutate(
+    local_I = local_moran[, "Ii"],
+    local_EI = local_moran[, "E.Ii"],
+    local_p = local_moran[, "Pr(z != E(Ii))"],
+    price_z = as.numeric(scale(x)),
+    lag_price_z = lag.listw(lw, price_z, zero.policy = TRUE)
+  ) |>
+  mutate(
+    cluster = case_when(
+      local_p < 0.05 & price_z > 0 & lag_price_z > 0 ~ "High-High",
+      local_p < 0.05 & price_z < 0 & lag_price_z < 0 ~ "Low-Low",
+      local_p < 0.05 & price_z > 0 & lag_price_z < 0 ~ "High-Low",
+      local_p < 0.05 & price_z < 0 & lag_price_z > 0 ~ "Low-High",
+      TRUE ~ "Not significant"
+    )
+  )
+```
+
+```{r}
+ggplot(d_lisa, aes(longitude, latitude, colour = cluster)) +
+  geom_point(size = 1.5, alpha = 0.85) +
+  scale_colour_manual(values = c(
+    "High-High" = "#D7191C",
+    "Low-Low" = "#2C7BB6",
+    "High-Low" = "#FDAE61",
+    "Low-High" = "#ABD9E9",
+    "Not significant" = "#D9D9D9"
+  )) +
+  coord_equal() +
+  theme_minimal() +
+  labs(
+    title = "Local Moran's I: Listing Price Clusters",
+    subtitle = "Eight nearest neighbours; BH-adjusted p < 0.05",
+    x = "Longitude",
+    y = "Latitude",
+    colour = "Cluster"
+  )
+```
+```{r}
+ggplot(d_lisa, aes(longitude, latitude, colour = price_z)) +
+  geom_point(size = 1.5, alpha = 0.55) +
+  scale_colour_viridis_c(option = "viridis", name = "Log price\n(z-score)") +
+  coord_equal() +
+  theme_minimal() +
+  labs(
+    title = "Spatial Distribution of Listing Prices",
+    x = "Longitude",
+    y = "Latitude"
+  )
+```
+
+```{r}
+d_lisa |>
+  count(cluster, sort = TRUE) |>
+  mutate(pct = round(100 * n / sum(n), 1))
+```
+
+```{r}
+# install.packages("maptiles")
+library(maptiles)
+library(sf)
+library(terra)
+
+# Convert your points to a spatial object
+pts <- st_as_sf(
+  d_lisa,
+  coords = c("longitude", "latitude"),
+  crs = 4326,
+  remove = FALSE
+)
+
+# Download basemap tiles covering the points
+basemap <- get_tiles(pts, provider = "OpenStreetMap", zoom = 11)
+
+# Plot basemap and points
+plotRGB(basemap)
+plot(st_geometry(pts), add = TRUE, pch = 16)
+```
+
+```{r}
+library(terra)
+library(sf)
+library(viridis)
+
+# Plot basemap
+plotRGB(basemap)
+
+# Transform points to basemap CRS
+pts_map <- st_transform(pts, crs(basemap))
+
+# Colour points by log price
+price_colours <- viridis(100)
+price_values <- log(d_lisa$list_price)
+
+# Map prices to colour indices
+colour_index <- cut(
+  price_values,
+  breaks = 100,
+  labels = FALSE
+)
+
+plot(
+  vect(pts_map),
+  add = TRUE,
+  pch = 16,
+  col = price_colours[colour_index],
+  cex = 0.7
+)
+
+# Add a legend for log price
+legend(
+  "bottomleft",
+  legend = round(
+    quantile(price_values, probs = seq(0, 1, 0.2), na.rm = TRUE),
+    2
+  ),
+  col = price_colours[seq(1, 100, length.out = 6) |> round()],
+  pch = 16,
+  title = "Log price",
+  bty = "n"
+)
+```
+```{r}
+listings$date_listed <- as.Date(listings$date_listed)
+```
+
+```{r}
+ggplot(listings, aes(x = date_listed, y = list_price)) +
+  geom_point(alpha = 0.4) +
+  scale_y_log10() +
+  theme_minimal() +
+  labs(
+    title = "Listing Prices Over Time",
+    x = "Date Listed",
+    y = "Listing Price (log scale)"
+  )
+```
+
+```{r}
+monthly <- listings |>
+  mutate(date_listed = as.Date(date_listed)) |>
+  filter(!is.na(date_listed), list_price > 0) |>
+  mutate(month = floor_date(date_listed, "month")) |>
+  group_by(month) |>
+  summarise(
+    median_price = median(list_price, na.rm = TRUE),
+    mean_log_price = mean(log(list_price), na.rm = TRUE),
+    n_listings = n(),
+    .groups = "drop"
+  )
+```
+
+
+```{r}
+ggplot(monthly, aes(month, median_price)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "Monthly Median Listing Price",
+    x = "Month",
+    y = "Median listing price ($)"
+  )
+```
+
+```{r}
+ggplot(monthly, aes(month, n_listings)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "Monthly Listing Activity",
+    x = "Month",
+    y = "Number of listings"
+  )
+```
+
+```{r}
+monthly |>
+  mutate(
+    year = year(month),
+    month_name = factor(
+      month(month),
+      levels = 1:12,
+      labels = month.abb
+    )
+  ) |>
+  ggplot(aes(month_name, median_price, group = year, colour = factor(year))) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "Monthly Price Patterns by Year",
+    x = "Month",
+    y = "Median listing price ($)",
+    colour = "Year"
+  )
+```
+
+```{r}
+monthly <- monthly |>
+  mutate(
+    year = lubridate::year(month),
+    month_num = lubridate::month(month)
+  )
+
+model <- lm(
+  mean_log_price ~ factor(month_num) + year,
+  data = monthly
+)
+
+anova(model)
+```
+
+there is evidence of a yearly trend in listing prices, but no statistically significant evidence of monthly seasonality
+
+```{r}
+100 * (exp(coef(model)["year"]) - 1)
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+
+# Fit a simple linear time trend
+model_trend <- lm(mean_log_price ~ year, data = monthly)
+
+# Add fitted values
+monthly <- monthly |>
+  mutate(
+    fitted = predict(model_trend),
+    residual = residuals(model_trend)
+  )
+
+# Plot observed prices and fitted trend
+ggplot(monthly, aes(x = month)) +
+  geom_line(aes(y = mean_log_price), colour = "steelblue") +
+  geom_line(aes(y = fitted), colour = "red", linewidth = 1) +
+  labs(
+    title = "Monthly Mean Log Listing Price",
+    subtitle = "Blue = observed prices; red = linear yearly trend",
+    x = "Date",
+    y = "Mean log listing price"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(monthly, aes(x = month, y = residual)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "Residuals After Removing the Yearly Trend",
+    x = "Date",
+    y = "Residual log price"
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
+residual_ts <- ts(monthly$residual, frequency = 12)
+
+acf(
+  residual_ts,
+  lag.max = 36,
+  main = "ACF of Residuals"
+)
+```
+
+```{r}
+Box.test(
+  monthly$residual,
+  lag = 12,
+  type = "Ljung-Box"
+)
+```
+there is still autocorrelation
+
+
+```{r}
+library(mgcv)
+library(ggplot2)
+
+model_gam <- gam(
+  mean_log_price ~ s(as.numeric(month), k = 12),
+  data = monthly,
+  method = "REML"
+)
+
+monthly$fitted_gam <- predict(model_gam)
+monthly$residual_gam <- residuals(model_gam)
+
+ggplot(monthly, aes(x = month)) +
+  geom_line(aes(y = mean_log_price), colour = "steelblue") +
+  geom_line(aes(y = fitted_gam), colour = "red", linewidth = 1) +
+  labs(
+    title = "Monthly Log Prices with a Smooth Trend",
+    x = "Date",
+    y = "Mean log listing price"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+acf(
+  monthly$residual_gam,
+  lag.max = 36,
+  main = "ACF of GAM Residuals"
+)
+
+Box.test(
+  monthly$residual_gam,
+  lag = 12,
+  type = "Ljung-Box"
+)
+```
+
+Monthly mean log listing prices exhibit a nonlinear temporal trend. A linear trend leaves significant residual autocorrelation, whereas a GAM with a smooth time effect substantially reduces it. We found no statistically significant evidence of month-of-year seasonality, although the synthetic nature of the dataset limits real-world interpretation.
+
+
+
+```{r}
+library(mgcv)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+monthly <- monthly |>
+  arrange(month) |>
+  mutate(
+    time = as.numeric(month - min(month)) / 30.4375,
+    month_num = month(month)
+  )
+
+# Model 1: smooth long-term trend only
+model_trend <- gam(
+  mean_log_price ~ s(time, k = 12),
+  data = monthly,
+  method = "REML"
+)
+
+# Model 2: smooth trend + annual seasonality
+model_seasonal <- gam(
+  mean_log_price ~
+    s(time, k = 12) +
+    s(month_num, bs = "cc", k = 12),
+  data = monthly,
+  method = "REML",
+  knots = list(month_num = c(0.5, 12.5))
+)
+
+summary(model_trend)
+summary(model_seasonal)
+```
+
+```{r}
+monthly <- monthly |>
+  mutate(
+    fitted_trend = predict(model_trend),
+    fitted_seasonal = predict(model_seasonal)
+  )
+
+ggplot(monthly, aes(x = month)) +
+  geom_line(aes(y = mean_log_price, colour = "Observed")) +
+  geom_line(aes(y = fitted_trend, colour = "Trend only"),
+            linewidth = 1) +
+  geom_line(aes(y = fitted_seasonal, colour = "Trend + seasonality"),
+            linewidth = 1, linetype = "dashed") +
+  scale_colour_manual(values = c(
+    "Observed" = "grey40",
+    "Trend only" = "steelblue",
+    "Trend + seasonality" = "firebrick"
+  )) +
+  labs(
+    title = "Comparing Trend and Seasonal GAMs",
+    x = "Date",
+    y = "Mean log listing price",
+    colour = "Series"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+rolling_cv <- function(data, initial = 36, horizon = 6) {
+  n <- nrow(data)
+  results <- list()
+  j <- 1
+
+  for (end_train in seq(initial, n - horizon, by = 6)) {
+    train <- data[1:end_train, ]
+    test  <- data[(end_train + 1):(end_train + horizon), ]
+
+    fit_trend <- gam(
+      mean_log_price ~ s(time, k = 12),
+      data = train,
+      method = "REML"
+    )
+
+    fit_seasonal <- gam(
+      mean_log_price ~
+        s(time, k = 12) +
+        s(month_num, bs = "cc", k = 12),
+      data = train,
+      method = "REML",
+      knots = list(month_num = c(0.5, 12.5))
+    )
+
+    results[[j]] <- data.frame(
+      month = test$month,
+      actual = test$mean_log_price,
+      trend = predict(fit_trend, newdata = test),
+      seasonal = predict(fit_seasonal, newdata = test)
+    )
+
+    j <- j + 1
+  }
+
+  bind_rows(results)
+}
+
+cv <- rolling_cv(monthly)
+
+cv |>
+  summarise(
+    trend_RMSE = sqrt(mean((actual - trend)^2)),
+    seasonal_RMSE = sqrt(mean((actual - seasonal)^2)),
+    trend_MAE = mean(abs(actual - trend)),
+    seasonal_MAE = mean(abs(actual - seasonal))
+  )
+```
+
+```{r}
+plot(
+  model_seasonal,
+  select = 2,
+  shade = TRUE,
+  main = "Estimated Annual Seasonal Effect",
+  xlab = "Month",
+  ylab = "Effect on mean log price"
+)
+```
+
+```{r}
+summary(model_seasonal)
+```
+
+```{r}
+library(mgcv)
+
+d_model <- listings |>
+  mutate(
+    date_listed = as.Date(date_listed),
+    log_price = log(list_price),
+    house_area = as.numeric(gsub(",", "", house_area)),
+    time = as.numeric(date_listed - min(date_listed, na.rm = TRUE)),
+    month_num = month(date_listed),
+    house_type_name = factor(house_type_name),
+    house_style = factor(house_style),
+    municipality = factor(municipality),
+    community = factor(community)
+  ) |>
+  filter(
+    is.finite(log_price),
+    !is.na(date_listed),
+    !is.na(longitude),
+    !is.na(latitude)
+  )
+```
+
+```{r}
+d_sf <- st_as_sf(
+  d_model,
+  coords = c("longitude", "latitude"),
+  crs = 4326,
+  remove = FALSE
+)
+
+d_sf <- st_transform(d_sf, 26917)
+
+coords <- st_coordinates(d_sf)
+d_model$x <- coords[, 1]
+d_model$y <- coords[, 2]
+```
+
+
+```{r}
+m_spatiotemporal <- bam(
+  log_price ~
+    house_type_name +
+    house_style +
+    bedrooms +
+    washrooms +
+    parking_total +
+    municipality +
+    community +
+    garage +
+    house_area +
+    lot_front +
+    lot_depth +
+    s(x, y, k = 100) +
+    s(time, k = 20) +
+    s(month_num, bs = "cc", k = 12),
+  data = d_model,
+  method = "REML",
+  knots = list(month_num = c(0.5, 12.5)),
+  na.action = na.exclude
+)
+
+summary(m_spatiotemporal)
+```

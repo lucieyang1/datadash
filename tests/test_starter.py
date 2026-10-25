@@ -8,8 +8,10 @@ import pytest
 
 import check_submission
 import data
+import features
 import models
 import run
+from analyze_words import word_associations
 
 
 def make_listings(n, seed=0, first_id=0):
@@ -77,6 +79,82 @@ def test_nearest_sales_uses_the_nearest_homes_of_the_same_type():
     assert model.predict(data.hide_answers(home, "off_market"))[0] == 500_000
 
 
+def test_spatiotemporal_gam_fits_and_predicts_for_both_tracks(monkeypatch):
+    listings = make_listings(120)
+    homes = data.hide_answers(make_listings(8, seed=1, first_id=1000), "off_market")
+    monkeypatch.setattr(models, "MODEL", "spatiotemporal_gam")
+
+    model = models.make_model("off_market").fit(listings)
+    predictions = model.predict(homes)
+
+    assert isinstance(model, models.SpatiotemporalGAM)
+    assert predictions.shape == (len(homes),)
+    assert np.isfinite(predictions).all()
+    assert (predictions > 0).all()
+
+
+def test_spatiotemporal_gam_month_spline_is_cyclic():
+    model = models.SpatiotemporalGAM()
+    january = model.month_spline.fit_transform(np.arange(1, 13).reshape(-1, 1))[:1]
+    january_next_year = model.month_spline.transform([[13.0]])
+
+    assert january.shape == (1, 12)
+    np.testing.assert_allclose(january, january_next_year)
+
+
+@pytest.mark.parametrize("track", ["off_market", "list_aware"])
+def test_xgboost_fits_and_predicts_for_both_tracks(track, monkeypatch):
+    listings = make_listings(80)
+    homes = data.hide_answers(make_listings(6, seed=2, first_id=1000), track)
+    homes.loc[homes.index[0], "remarks"] = "LANDSCAPED!"
+    monkeypatch.setattr(models, "MODEL", "xgboost")
+
+    model = models.make_model(track).fit(listings)
+    predictions = model.predict(homes)
+
+    assert isinstance(model, models.XGBoostModel)
+    assert predictions.shape == (len(homes),)
+    assert np.isfinite(predictions).all()
+    assert (predictions > 0).all()
+    assert ("list_price" in model._values(homes)[0]) == (track == "list_aware")
+    assert model._values(homes)[0]["word_landscaped"].iloc[0] == 1
+
+
+def test_remarks_word_features_are_case_insensitive_and_match_whole_words():
+    remarks = pd.Series([
+        "A landscaped courtyard with a chef's kitchen.",
+        "A studio, compact layout.",
+        "Landscaping nearby, no garden note.",
+        None,
+    ])
+
+    words = features.remarks_word_features(remarks)
+
+    assert words["word_landscaped"].tolist() == [1, 0, 0, 0]
+    assert words["word_courtyard"].tolist() == [1, 0, 0, 0]
+    assert words["word_chef"].tolist() == [1, 0, 0, 0]
+    assert words["word_studio"].tolist() == [0, 1, 0, 0]
+    assert words["word_compact"].tolist() == [0, 1, 0, 0]
+
+
+def test_word_associations_finds_price_correlated_words():
+    listings = make_listings(100)
+    listings["sold_price"] = np.where(
+        np.arange(len(listings)) < 50, 500_000, 1_500_000
+    )
+    listings["remarks"] = np.where(
+        np.arange(len(listings)) < 50, "ordinary home", "premium home"
+    )
+
+    associations = word_associations(listings, min_df=5)
+    premium = associations.set_index("word").loc["premium"]
+    ordinary = associations.set_index("word").loc["ordinary"]
+
+    assert premium["estimated_price_association_pct"] > 0
+    assert ordinary["estimated_price_association_pct"] < 0
+    assert premium["listings_with_word"] == 50
+
+
 # ---- check_submission rejects bad files ----
 
 IDS = ["SYN-0000001", "SYN-0000002", "SYN-0000003"]
@@ -140,4 +218,26 @@ def test_whole_pipeline_on_tiny_data(tmp_path, monkeypatch):
     run.report()
     run.predict()
     assert run.check()
-    assert (tmp_path / "figures" / "error_by_price_range.png").exists()
+    experiments = list((tmp_path / "outputs" / "experiments").iterdir())
+    assert len(experiments) == 1
+    assert (experiments[0] / "validation_predictions.csv").exists()
+    assert (experiments[0] / "reports" / "validation_report.md").exists()
+    assert (experiments[0] / "figures" / "error_by_price_range.png").exists()
+
+
+def test_experiment_names_do_not_overwrite_existing_runs(tmp_path, monkeypatch):
+    monkeypatch.setattr(run, "ROOT", tmp_path)
+    path = run.experiment_dir("first-run", create=True)
+    marker = path / "keep.txt"
+    marker.write_text("existing results")
+
+    with pytest.raises(FileExistsError):
+        run.experiment_dir("first-run", create=True)
+
+    assert marker.read_text() == "existing results"
+
+
+@pytest.mark.parametrize("name", ["../outside", "with spaces", ""])
+def test_experiment_names_reject_unsafe_or_invalid_values(name):
+    with pytest.raises(ValueError):
+        run.experiment_dir(name)

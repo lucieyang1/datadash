@@ -13,10 +13,18 @@ Ideas to try:
 - words in the remarks, such as "renovated" or "needs work"
 - off-market and list-aware can use different features: list-aware has list_price
 """
+import re
+
 import pandas as pd
 
 PROPERTY_TYPES = ["Condo Apt", "Detached", "Semi-Detached", "Condo Townhouse",
                   "Freehold Townhouse", "Co-Op Apt"]
+PRICE_ASSOCIATED_WORDS = [
+    "landscaped", "courtyard", "chef", "plumbing", "high", "entertainers",
+    "entertain", "discerning", "special", "generously", "tour", "transformation",
+    "grand", "studio", "compact", "downsizers", "substantial", "downsize",
+    "waterproofing", "builders", "efficient", "starting", "household",
+]
 
 
 def square_feet(house_area):
@@ -26,6 +34,17 @@ def square_feet(house_area):
     low = pd.to_numeric(parts[0], errors="coerce")
     high = pd.to_numeric(parts[1], errors="coerce").fillna(low)
     return (low + high) / 2
+
+
+def remarks_word_features(remarks):
+    """Binary exact-word indicators from the strongest generic price associations."""
+    text = remarks.fillna("").astype(str)
+    return pd.DataFrame({
+        "word_" + word: text.str.contains(
+            rf"\b{re.escape(word)}\b", case=False, regex=True
+        ).astype("int8")
+        for word in PRICE_ASSOCIATED_WORDS
+    }, index=remarks.index)
 
 
 def off_market_features(homes):
