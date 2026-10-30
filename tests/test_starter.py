@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 import check_submission
+from convlstm import ConvLSTMPriceModel, SpatialSaleHistory
 import data
 import features
 import models
@@ -244,6 +245,42 @@ def test_community_comps_use_only_past_sales_of_same_community_and_type():
     assert result.iloc[0]["community_comparable_count"] == 2
     assert result.iloc[0]["community_comparable_median_price_per_sqft"] > 0
     assert result.iloc[1]["community_comparable_median_price"] == 2_000_000
+
+
+def test_convlstm_spatial_history_uses_only_months_before_listing():
+    sales = make_listings(2)
+    sales["house_type_name"] = "Detached"
+    sales["latitude"] = 43.70
+    sales["longitude"] = -79.40
+    sales["date_sold"] = pd.to_datetime(["2024-12-15", "2025-01-10"])
+    sales["sold_price"] = [500_000, 9_000_000]
+    home = make_listings(1, first_id=3000)
+    home["house_type_name"] = "Detached"
+    home["date_listed"] = pd.Timestamp("2025-01-20")
+    home["latitude"] = 43.70
+    home["longitude"] = -79.40
+
+    history = SpatialSaleHistory().fit(sales)
+    patch = history.patches(home, np.array([0]))
+
+    assert patch.shape == (1, 12, 3, 7, 7)
+    assert patch[0, -1, 0, 3, 3] == pytest.approx(np.log(2) / 4)
+    assert patch[0, -1, 1, 3, 3] == pytest.approx(np.log(500_000) - 13.3, abs=1e-5)
+
+
+@pytest.mark.parametrize("track", ["off_market", "list_aware"])
+def test_convlstm_model_fits_and_predicts(track):
+    listings = make_listings(40)
+    homes = data.hide_answers(make_listings(3, seed=3, first_id=4000), track)
+    model = ConvLSTMPriceModel(track)
+    model.epochs = 1
+    model.batch_size = 16
+
+    predictions = model.fit(listings).predict(homes)
+
+    assert predictions.shape == (len(homes),)
+    assert np.isfinite(predictions).all()
+    assert (predictions > 0).all()
 
 
 def test_word_associations_finds_price_correlated_words():

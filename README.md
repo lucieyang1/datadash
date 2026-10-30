@@ -43,7 +43,7 @@ On Windows, use `py` if `python` is not found.
 ## What to edit
 
 - **`features.py`**: the features.
-- **`models.py`**: set `MODEL` to `"baseline"`, `"feature"`, `"spatiotemporal_gam"`, `"xgboost"`, `"xgboost_rotated"`, `"xgboost_community_comps"`, `"lightgbm_community_comps"`, or `"lightgbm_nearby_comps_safe"` to choose a model.
+- **`models.py`**: set `MODEL` to `"baseline"`, `"feature"`, `"spatiotemporal_gam"`, `"xgboost"`, `"xgboost_rotated"`, `"xgboost_community_comps"`, `"lightgbm_community_comps"`, `"lightgbm_nearby_comps_safe"`, or `"convlstm_spatial"` to choose a model.
   The GAM-style model mirrors the supplied `mgcv::bam` formula with spline bases and Ridge
   regularization; it approximates, but does not reproduce, `bam`'s REML smoothness selection.
   XGBoost uses the same property, location, and time inputs and adds list price on the
@@ -57,6 +57,14 @@ On Windows, use `py` if `python` is not found.
 To compare XGBoost, set `MODEL = "xgboost"` and run
 `python run.py validate --experiment xgboost-v1`, then
 `python run.py report --experiment xgboost-v1`.
+The experimental `"convlstm_spatial"` model represents the 12 months before each
+listing as 1 km spatial grids of same-property-type sale counts, median prices, and
+median price per square foot. It processes each home's 7-by-7 km neighborhood with
+a ConvLSTM and combines that representation with the structured property features.
+Every frame excludes its own and future listing months. Set
+`MODEL = "convlstm_spatial"` and validate it with a new experiment name. It is a prototype
+and may be slower or less accurate than the tree models. To keep CPU training manageable,
+each fold trains for two epochs on all earlier sales.
 To try LightGBM with the same community-comparable and rotated-coordinate features,
 set `MODEL = "lightgbm_community_comps"` and run validation/report with a new
 experiment name. This keeps the XGBoost community-comps model as the default until

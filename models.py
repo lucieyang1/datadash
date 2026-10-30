@@ -37,6 +37,10 @@ def make_model(track):
         return CommunityComparableLightGBMModel(track)
     if MODEL == "lightgbm_nearby_comps_safe":
         return SafeNearbyComparableLightGBMModel(track)
+    if MODEL == "convlstm_spatial":
+        from convlstm import ConvLSTMPriceModel
+
+        return ConvLSTMPriceModel(track)
     if MODEL == "feature":
         if track == "list_aware":
             return FeatureModel(features.list_aware_features)
@@ -46,7 +50,7 @@ def make_model(track):
             f"Unknown model {MODEL!r}; choose 'baseline', 'feature', "
             "'spatiotemporal_gam', 'xgboost', 'xgboost_rotated', or "
             "'xgboost_community_comps', 'lightgbm_community_comps', or "
-            "'lightgbm_nearby_comps_safe'."
+            "'lightgbm_nearby_comps_safe', or 'convlstm_spatial'."
         )
     if track == "list_aware":
         return ListPriceBaseline()
