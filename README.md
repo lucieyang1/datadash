@@ -43,17 +43,49 @@ On Windows, use `py` if `python` is not found.
 ## What to edit
 
 - **`features.py`**: the features.
-- **`models.py`**: set `MODEL` to `"baseline"`, `"feature"`, `"spatiotemporal_gam"`, or `"xgboost"` to choose a model.
+- **`models.py`**: set `MODEL` to `"baseline"`, `"feature"`, `"spatiotemporal_gam"`, `"xgboost"`, `"xgboost_rotated"`, `"xgboost_community_comps"`, `"lightgbm_community_comps"`, or `"lightgbm_nearby_comps_safe"` to choose a model.
   The GAM-style model mirrors the supplied `mgcv::bam` formula with spline bases and Ridge
   regularization; it approximates, but does not reproduce, `bam`'s REML smoothness selection.
   XGBoost uses the same property, location, and time inputs and adds list price on the
-  list-aware track. Its remarks features include binary presence flags for the
-  strongest generic words from `analyze_words.py`; location names are omitted because
-  the model already has community and municipality categories.
+  list-aware track. The distance-based variants use same-type comparable sales within
+  3 km; the community variant instead uses sales of the same type in the same community.
+  Both calculate median price, median price per square foot, and count from sales before
+  the home's listing month. The distance-based variant also includes nearest distance.
+  The exploratory word associations from `analyze_words.py` are not currently used as
+  model features.
 
 To compare XGBoost, set `MODEL = "xgboost"` and run
 `python run.py validate --experiment xgboost-v1`, then
 `python run.py report --experiment xgboost-v1`.
+To try LightGBM with the same community-comparable and rotated-coordinate features,
+set `MODEL = "lightgbm_community_comps"` and run validation/report with a new
+experiment name. This keeps the XGBoost community-comps model as the default until
+the LightGBM validation results have been compared. In the Dec 2025-May 2026
+walk-forward validation, LightGBM scored 12.32% off-market MAPE and 5.47%
+list-aware MAPE, compared with 12.01% and 5.51% for XGBoost. The results are in
+`outputs/experiments/lightgbm-community-comps-v1/`.
+To try the safe nearby-comps version instead, set
+`MODEL = "lightgbm_nearby_comps_safe"`. It uses same-type sales within 3 km,
+strictly before the listing month, and includes the rotated coordinate features.
+On the Dec 2025-May 2026 walk-forward validation it scored 12.22% off-market
+MAPE and 5.54% list-aware MAPE, compared with 12.59% and 5.53% for the existing
+XGBoost safe nearby-comps experiment. Results are in
+`outputs/experiments/lightgbm-nearby-comps-safe-v1/`.
+The default `"xgboost_community_comps"` model keeps rotated longitude and latitude inputs
+but replaces distance-matched comparable sales with same-community, same-property-type
+sales; only sales before the listing month are used. On this project's Dec 2025-May 2026
+walk-forward validation, it improved MAPE from 12.55% to 12.01% off-market and
+from 5.54% to 5.51% list-aware compared with `"xgboost_rotated"`. Its results are in
+`outputs/experiments/xgboost-community-comps-v1/`.
+To compare the rotated distance-based version, set `MODEL = "xgboost_rotated"` and
+validate/report it under a new experiment name.
+Both models keep the original longitude and latitude inputs and add local coordinates
+rotated 45 degrees (with longitude scaled for Toronto's latitude). This can help
+axis-aligned trees learn diagonal geographic boundaries; it is not guaranteed to
+improve every dataset. On this project's Dec 2025-May 2026
+walk-forward validation, it improved MAPE from 13.77% to 12.55% off-market and
+from 5.59% to 5.54% list-aware relative to the non-rotated XGBoost variant. Its results are in
+`outputs/experiments/xgboost-rotated-v1/`.
 
 To explore which words in listing remarks are associated with higher or lower
 prices after controlling for the structured property, location, and time features,

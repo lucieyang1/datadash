@@ -102,22 +102,64 @@ def test_spatiotemporal_gam_month_spline_is_cyclic():
     np.testing.assert_allclose(january, january_next_year)
 
 
+@pytest.mark.parametrize(
+    ("model_name", "model_type", "rotated"),
+    [
+        ("xgboost", models.XGBoostModel, False),
+        ("xgboost_rotated", models.RotatedCoordinateXGBoostModel, True),
+        ("xgboost_community_comps", models.CommunityComparableXGBoostModel, True),
+        (
+            "lightgbm_community_comps",
+            models.CommunityComparableLightGBMModel,
+            True,
+        ),
+        (
+            "lightgbm_nearby_comps_safe",
+            models.SafeNearbyComparableLightGBMModel,
+            True,
+        ),
+    ],
+)
 @pytest.mark.parametrize("track", ["off_market", "list_aware"])
-def test_xgboost_fits_and_predicts_for_both_tracks(track, monkeypatch):
+def test_xgboost_fits_and_predicts_for_both_tracks(
+    track, model_name, model_type, rotated, monkeypatch
+):
     listings = make_listings(80)
     homes = data.hide_answers(make_listings(6, seed=2, first_id=1000), track)
     homes.loc[homes.index[0], "remarks"] = "LANDSCAPED!"
-    monkeypatch.setattr(models, "MODEL", "xgboost")
+    monkeypatch.setattr(models, "MODEL", model_name)
 
     model = models.make_model(track).fit(listings)
     predictions = model.predict(homes)
 
-    assert isinstance(model, models.XGBoostModel)
+    assert isinstance(model, model_type)
     assert predictions.shape == (len(homes),)
     assert np.isfinite(predictions).all()
     assert (predictions > 0).all()
     assert ("list_price" in model._values(homes)[0]) == (track == "list_aware")
-    assert model._values(homes)[0]["word_landscaped"].iloc[0] == 1
+    assert not any(column.startswith("word_") for column in model._values(homes)[0].columns)
+    comparable_features = model._values(homes)[0]
+    if model_name in {"xgboost_community_comps", "lightgbm_community_comps"}:
+        assert "community_comparable_median_price" in comparable_features
+        assert "nearby_comparable_median_price" not in comparable_features
+    else:
+        assert "nearby_comparable_median_price" in comparable_features
+    assert ("coordinate_rotated_45_x" in model._values(homes)[0]) == rotated
+    assert ("coordinate_rotated_45_y" in model._values(homes)[0]) == rotated
+
+
+def test_rotated_xgboost_coordinates_use_local_longitude_scale():
+    homes = make_listings(3)
+    model = models.RotatedCoordinateXGBoostModel("off_market")
+    model.comparables.fit(homes)
+
+    numeric, _ = model._values(homes)
+
+    scale = np.sqrt(0.5)
+    x = homes["longitude"] * 0.72
+    y = homes["latitude"]
+    np.testing.assert_allclose(numeric["coordinate_rotated_45_x"], (x + y) * scale)
+    np.testing.assert_allclose(numeric["coordinate_rotated_45_y"], (y - x) * scale)
 
 
 def test_remarks_word_features_are_case_insensitive_and_match_whole_words():
@@ -135,6 +177,73 @@ def test_remarks_word_features_are_case_insensitive_and_match_whole_words():
     assert words["word_chef"].tolist() == [1, 0, 0, 0]
     assert words["word_studio"].tolist() == [0, 1, 0, 0]
     assert words["word_compact"].tolist() == [0, 1, 0, 0]
+
+
+def test_nearby_comparable_features_only_use_prior_nearby_same_type_sales():
+    sales = make_listings(4)
+    sales["house_type_name"] = "Detached"
+    sales["latitude"] = 43.70
+    sales["longitude"] = -79.40
+    sales["date_sold"] = pd.to_datetime([
+        "2024-12-05", "2024-12-08", "2025-01-25", "2024-12-08"
+    ])
+    sales["sold_price"] = [500_000, 700_000, 9_000_000, 2_000_000]
+    sales.loc[sales.index[3], "longitude"] = -79.70
+
+    homes = make_listings(1, first_id=2000)
+    homes["date_listed"] = pd.Timestamp("2025-01-20")
+    homes["latitude"] = 43.70
+    homes["longitude"] = -79.40
+    homes["house_type_name"] = "Detached"
+
+    result = models.NearbyComparableFeatures().fit(sales).transform(homes).iloc[0]
+
+    assert result["nearby_comparable_median_price"] == 600_000
+    assert result["nearby_comparable_count"] == 2
+    assert result["nearby_comparable_nearest_km"] >= 0
+    assert result["nearby_comparable_median_price_per_sqft"] > 0
+
+
+def test_nearby_comparable_features_exclude_sales_from_listing_month():
+    sales = make_listings(2)
+    sales["house_type_name"] = "Detached"
+    sales["latitude"] = 43.70
+    sales["longitude"] = -79.40
+    sales["date_sold"] = pd.to_datetime(["2024-12-15", "2025-01-10"])
+    sales["sold_price"] = [500_000, 900_000]
+    home = make_listings(1, first_id=3000)
+    home["house_type_name"] = "Detached"
+    home["date_listed"] = pd.Timestamp("2025-01-20")
+    home["latitude"] = 43.70
+    home["longitude"] = -79.40
+
+    result = models.NearbyComparableFeatures().fit(sales).transform(home).iloc[0]
+
+    assert result["nearby_comparable_median_price"] == 500_000
+    assert result["nearby_comparable_count"] == 1
+
+
+def test_community_comps_use_only_past_sales_of_same_community_and_type():
+    sales = make_listings(5)
+    sales["house_type_name"] = "Detached"
+    sales["community"] = ["A", "A", "A", "B", "A"]
+    sales["date_sold"] = pd.to_datetime([
+        "2024-12-05", "2024-12-08", "2025-01-10", "2024-12-08", "2024-12-08"
+    ])
+    sales["sold_price"] = [500_000, 700_000, 9_000_000, 2_000_000, 1_000_000]
+    sales.loc[sales.index[4], "house_type_name"] = "Condo Apt"
+
+    homes = make_listings(2, first_id=2000)
+    homes["date_listed"] = pd.Timestamp("2025-01-20")
+    homes["community"] = ["A", "B"]
+    homes["house_type_name"] = "Detached"
+
+    result = models.CommunityComparableFeatures().fit(sales).transform(homes)
+
+    assert result.iloc[0]["community_comparable_median_price"] == 600_000
+    assert result.iloc[0]["community_comparable_count"] == 2
+    assert result.iloc[0]["community_comparable_median_price_per_sqft"] > 0
+    assert result.iloc[1]["community_comparable_median_price"] == 2_000_000
 
 
 def test_word_associations_finds_price_correlated_words():

@@ -3,6 +3,10 @@ title: "eda"
 output: html_document
 ---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
+```
+
 ```{r}
 library(tidyverse)
 ```
@@ -593,3 +597,250 @@ m_spatiotemporal <- bam(
 
 summary(m_spatiotemporal)
 ```
+
+
+
+```{r}
+municipality_centers <- d_model |>
+  filter(
+    !is.na(municipality),
+    !is.na(longitude),
+    !is.na(latitude)
+  ) |>
+  group_by(municipality) |>
+  summarise(
+    center_lon = median(longitude),
+    center_lat = median(latitude),
+    n_listings = n(),
+    .groups = "drop"
+  )
+
+municipality_centers
+```
+
+```{r}
+ggplot() +
+  geom_point(
+    data = d_model,
+    aes(x = longitude, y = latitude),
+    colour = "grey70",
+    alpha = 0.2,
+    size = 0.5
+  ) +
+  geom_point(
+    data = municipality_centers,
+    aes(x = center_lon, y = center_lat, size = n_listings),
+    colour = "red"
+  ) +
+  geom_text(
+    data = municipality_centers,
+    aes(x = center_lon, y = center_lat, label = municipality),
+    nudge_y = 0.008,
+    size = 3,
+    check_overlap = TRUE
+  ) +
+  scale_size_continuous(name = "Number of listings") +
+  coord_equal() +
+  labs(
+    title = "Median Listing Location by Municipality",
+    subtitle = "Red points mark the median coordinates of listings",
+    x = "Longitude",
+    y = "Latitude"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+community_centers <- d_model |>
+  filter(
+    !is.na(community),
+    !is.na(longitude),
+    !is.na(latitude)
+  ) |>
+  group_by(community) |>
+  summarise(
+    center_lon = median(longitude),
+    center_lat = median(latitude),
+    n_listings = n(),
+    .groups = "drop"
+  )
+
+community_centers
+```
+
+```{r}
+ggplot() +
+  geom_point(
+    data = d_model,
+    aes(x = longitude, y = latitude),
+    colour = "grey70",
+    alpha = 0.2,
+    size = 0.5
+  ) +
+  geom_point(
+    data = community_centers,
+    aes(x = center_lon, y = center_lat, size = n_listings),
+    colour = "red"
+  ) +
+  geom_text(
+    data = community_centers,
+    aes(x = center_lon, y = center_lat, label = community),
+    nudge_y = 0.008,
+    size = 3,
+    check_overlap = TRUE
+  ) +
+  scale_size_continuous(name = "Number of listings") +
+  coord_equal() +
+  labs(
+    title = "Median Listing Location by Municipality",
+    subtitle = "Red points mark the median coordinates of listings",
+    x = "Longitude",
+    y = "Latitude"
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
+# Convert listings to projected coordinates
+listings_sf <- st_as_sf(
+  d_model,
+  coords = c("longitude", "latitude"),
+  crs = 4326,
+  remove = FALSE
+) |>
+  st_transform(26917)
+
+# Convert community centers to spatial points
+community_centers_sf <- st_as_sf(
+  community_centers,
+  coords = c("center_lon", "center_lat"),
+  crs = 4326,
+  remove = FALSE
+) |>
+  st_transform(26917)
+
+# Extract projected coordinates from community centers,
+# then remove the sf geometry column
+centers_xy <- community_centers_sf |>
+  mutate(
+    cx = st_coordinates(geometry)[, 1],
+    cy = st_coordinates(geometry)[, 2]
+  ) |>
+  st_drop_geometry() |>
+  select(community, cx, cy)
+
+# Extract projected coordinates from listings,
+# then remove the sf geometry column
+listings_with_distance <- listings_sf |>
+  mutate(
+    x = st_coordinates(geometry)[, 1],
+    y = st_coordinates(geometry)[, 2]
+  ) |>
+  st_drop_geometry() |>
+  left_join(centers_xy, by = "community") |>
+  mutate(
+    distance_to_center_km = sqrt((x - cx)^2 + (y - cy)^2) / 1000
+  )
+```
+
+
+
+```{r}
+set.seed(42)
+
+plot_data <- listings_with_distance |>
+  filter(
+    is.finite(log_price),
+    is.finite(distance_to_center_km)
+  )
+
+plot_data <- plot_data |>
+  slice_sample(n = min(10000, nrow(plot_data)))
+
+ggplot(
+  plot_data,
+  aes(x = distance_to_center_km, y = log_price)
+) +
+  geom_point(alpha = 0.15, size = 0.7) +
+  geom_smooth(method = "loess", colour = "red") +
+  labs(
+    title = "Asking Price vs. Distance to Community Center",
+    x = "Distance to community center (km)",
+    y = "Log asking price"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(
+  plot_data,
+  aes(
+    x = distance_to_center_km,
+    y = log_price,
+    colour = house_type_name
+  )
+) +
+  geom_point(alpha = 0.3, size = 0.8) +
+  geom_smooth(method = "loess", se = FALSE) +
+  labs(
+    title = "Asking Price vs. Distance to Community Center",
+    x = "Distance to Community Center (km)",
+    y = "Log Asking Price",
+    colour = "Property Type"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(
+  plot_data,
+  aes(
+    x = distance_to_center_km,
+    y = log_price,
+    colour = factor(bedrooms)
+  )
+) +
+  geom_point(alpha = 0.35, size = 0.8) +
+  geom_smooth(method = "loess", se = FALSE) +
+  labs(
+    title = "Asking Price vs. Distance by Number of Bedrooms",
+    x = "Distance to Community Center (km)",
+    y = "Log Asking Price",
+    colour = "Bedrooms"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+listings |>
+  filter(!is.na(house_type_name), list_price > 0) |>
+  ggplot(aes(x = house_type_name, y = list_price)) +
+  geom_boxplot() +
+  scale_y_log10() +
+  labs(
+    title = "Asking Price by House Type",
+    x = "House Type",
+    y = "List Price (log scale)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r}
+listings |>
+  filter(!is.na(bedrooms), list_price > 0) |>
+  mutate(bedrooms = factor(bedrooms)) |>
+  ggplot(aes(x = bedrooms, y = list_price)) +
+  geom_boxplot() +
+  scale_y_log10() +
+  labs(
+    title = "Asking Price by Number of Bedrooms",
+    x = "Number of Bedrooms",
+    y = "List Price (log scale)"
+  ) +
+  theme_minimal()
+```
+
+

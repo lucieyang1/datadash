@@ -10,15 +10,17 @@ deliberately simple, so you can measure how much your own ideas add.
 import numpy as np
 import pandas as pd
 from scipy import sparse
+from scipy.spatial import cKDTree
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import OneHotEncoder, SplineTransformer, StandardScaler
+from lightgbm import LGBMRegressor
 from xgboost import XGBRegressor
 
 import features
 
-MODEL = "xgboost" 
+MODEL = "xgboost_community_comps"
 
 
 def make_model(track):
@@ -27,6 +29,14 @@ def make_model(track):
         return SpatiotemporalGAM()
     if MODEL == "xgboost":
         return XGBoostModel(track)
+    if MODEL == "xgboost_rotated":
+        return RotatedCoordinateXGBoostModel(track)
+    if MODEL == "xgboost_community_comps":
+        return CommunityComparableXGBoostModel(track)
+    if MODEL == "lightgbm_community_comps":
+        return CommunityComparableLightGBMModel(track)
+    if MODEL == "lightgbm_nearby_comps_safe":
+        return SafeNearbyComparableLightGBMModel(track)
     if MODEL == "feature":
         if track == "list_aware":
             return FeatureModel(features.list_aware_features)
@@ -34,7 +44,9 @@ def make_model(track):
     if MODEL != "baseline":
         raise ValueError(
             f"Unknown model {MODEL!r}; choose 'baseline', 'feature', "
-            "'spatiotemporal_gam', or 'xgboost'."
+            "'spatiotemporal_gam', 'xgboost', 'xgboost_rotated', or "
+            "'xgboost_community_comps', 'lightgbm_community_comps', or "
+            "'lightgbm_nearby_comps_safe'."
         )
     if track == "list_aware":
         return ListPriceBaseline()
@@ -224,6 +236,7 @@ class XGBoostModel:
         self.include_list_price = track == "list_aware"
         self.numeric_imputer = SimpleImputer(strategy="median", keep_empty_features=True)
         self.category_encoder = OneHotEncoder(handle_unknown="ignore", dtype=np.float32)
+        self.comparables = NearbyComparableFeatures()
         self.model = XGBRegressor(
             objective="reg:squarederror",
             eval_metric="rmse",
@@ -252,7 +265,7 @@ class XGBoostModel:
         month_angle = 2 * np.pi * (listed.dt.month - 1) / 12
         numeric["month_sin"] = np.sin(month_angle)
         numeric["month_cos"] = np.cos(month_angle)
-        numeric = numeric.join(features.remarks_word_features(homes["remarks"]))
+        numeric = numeric.join(self.comparables.transform(homes))
         if self.include_list_price:
             numeric["list_price"] = pd.to_numeric(homes["list_price"], errors="coerce")
 
@@ -274,8 +287,295 @@ class XGBoostModel:
         )
 
     def fit(self, train):
+        self.comparables.fit(train)
         self.model.fit(self._design_matrix(train, fit=True), np.log(train["sold_price"]))
         return self
 
     def predict(self, homes):
         return np.exp(self.model.predict(self._design_matrix(homes)))
+
+
+class RotatedCoordinateXGBoostModel(XGBoostModel):
+    """XGBoost model with additional 45-degree local coordinate features."""
+
+    def _values(self, homes):
+        numeric, categories = super()._values(homes)
+        longitude = pd.to_numeric(homes["longitude"], errors="coerce")
+        latitude = pd.to_numeric(homes["latitude"], errors="coerce")
+        x = longitude * 0.72
+        y = latitude
+        scale = np.sqrt(0.5)
+        numeric["coordinate_rotated_45_x"] = (x + y) * scale
+        numeric["coordinate_rotated_45_y"] = (y - x) * scale
+        return numeric, categories
+
+
+class CommunityComparableXGBoostModel(RotatedCoordinateXGBoostModel):
+    """Rotated XGBoost using same-community rather than distance-based comps."""
+
+    def __init__(self, track, **kwargs):
+        super().__init__(track, **kwargs)
+        self.comparables = CommunityComparableFeatures()
+
+
+class CommunityComparableLightGBMModel(RotatedCoordinateXGBoostModel):
+    """LightGBM using rotated coordinates and same-community comparable sales."""
+
+    def __init__(self, track):
+        super().__init__(track)
+        self.comparables = CommunityComparableFeatures()
+        self.model = LGBMRegressor(
+            objective="regression",
+            n_estimators=600,
+            learning_rate=0.05,
+            num_leaves=31,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_lambda=1.0,
+            n_jobs=-1,
+            random_state=0,
+            verbosity=-1,
+        )
+
+    def predict(self, homes):
+        return np.exp(self.model.booster_.predict(self._design_matrix(homes)))
+
+
+class SafeNearbyComparableLightGBMModel(RotatedCoordinateXGBoostModel):
+    """LightGBM using past-only nearby comps and rotated coordinates."""
+
+    def __init__(self, track):
+        super().__init__(track)
+        self.model = LGBMRegressor(
+            objective="regression",
+            n_estimators=600,
+            learning_rate=0.05,
+            num_leaves=31,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_lambda=1.0,
+            n_jobs=-1,
+            random_state=0,
+            verbosity=-1,
+        )
+
+    def predict(self, homes):
+        return np.exp(self.model.booster_.predict(self._design_matrix(homes)))
+
+
+class CommunityComparableFeatures:
+    """Past-only comparable sale summaries for the same community and home type."""
+
+    def fit(self, sales):
+        self.sale_dates = pd.to_datetime(sales["date_sold"], errors="coerce").to_numpy()
+        self.communities = sales["community"].fillna("").astype(str).to_numpy()
+        self.property_types = sales["house_type_name"].fillna("").astype(str).to_numpy()
+        self.prices = pd.to_numeric(sales["sold_price"], errors="coerce").to_numpy(dtype=float)
+        self.square_feet = features.square_feet(sales["house_area"]).to_numpy(dtype=float)
+        self.sales_by_group = {}
+        valid = (
+            pd.notna(self.sale_dates)
+            & (self.communities != "")
+            & (self.property_types != "")
+            & np.isfinite(self.prices)
+            & (self.prices > 0)
+        )
+        valid_positions = np.flatnonzero(valid)
+        grouped_sales = pd.DataFrame({
+            "community": self.communities[valid_positions],
+            "property_type": self.property_types[valid_positions],
+            "position": valid_positions,
+        })
+        for key, group in grouped_sales.groupby(
+            ["community", "property_type"], sort=False
+        ):
+            positions = group["position"].to_numpy()
+            order = np.argsort(self.sale_dates[positions], kind="stable")
+            self.sales_by_group[key] = (
+                self.sale_dates[positions][order],
+                self.prices[positions][order],
+                self.square_feet[positions][order],
+            )
+        return self
+
+    def transform(self, homes):
+        columns = [
+            "community_comparable_median_price",
+            "community_comparable_median_price_per_sqft",
+            "community_comparable_count",
+        ]
+        result = pd.DataFrame(np.nan, index=homes.index, columns=columns, dtype=float)
+        result["community_comparable_count"] = 0
+        if homes.empty:
+            return result
+
+        home_dates = pd.to_datetime(homes["date_listed"], errors="coerce")
+        communities = homes["community"].fillna("").astype(str).to_numpy()
+        property_types = homes["house_type_name"].fillna("").astype(str).to_numpy()
+        periods = home_dates.dt.to_period("M")
+        period_values = periods.to_numpy()
+        valid_homes = home_dates.notna().to_numpy() & (communities != "") & (
+            property_types != ""
+        )
+
+        valid_positions = np.flatnonzero(valid_homes)
+        query_groups = pd.DataFrame({
+            "period": period_values[valid_positions],
+            "community": communities[valid_positions],
+            "property_type": property_types[valid_positions],
+            "position": valid_positions,
+        })
+        median_prices = np.full(len(homes), np.nan)
+        median_ppsf = np.full(len(homes), np.nan)
+        comparable_counts = np.zeros(len(homes), dtype=float)
+        for (period, community, property_type), group_homes in query_groups.groupby(
+            ["period", "community", "property_type"], sort=False
+        ):
+            rows = group_homes["position"].to_numpy()
+            cutoff = period.start_time.to_datetime64()
+            sales_group = self.sales_by_group.get((community, property_type))
+            if sales_group is None:
+                continue
+            sale_dates, prices, sizes = sales_group
+            earlier_count = np.searchsorted(sale_dates, cutoff, side="left")
+            if earlier_count == 0:
+                continue
+
+            prices = prices[:earlier_count]
+            sizes = sizes[:earlier_count]
+            median_prices[rows] = np.median(prices)
+            valid_sizes = np.isfinite(sizes) & (sizes > 0)
+            if valid_sizes.any():
+                median_ppsf[rows] = np.median(prices[valid_sizes] / sizes[valid_sizes])
+            comparable_counts[rows] = earlier_count
+        result["community_comparable_median_price"] = median_prices
+        result["community_comparable_median_price_per_sqft"] = median_ppsf
+        result["community_comparable_count"] = comparable_counts
+        return result
+
+
+class NearbyComparableFeatures:
+    """Past-only nearby sale summaries for same-type homes.
+
+    Candidate locations come only from sales before the listing month; this
+    deliberately excludes same-month sales to keep future locations out too.
+    """
+
+    candidate_count = 128
+    radius_km = 3.0
+    longitude_scale = 0.72
+    km_per_degree = 111.2
+    tree_cache = {}
+
+    def fit(self, sales):
+        self.sales = sales
+        self.sale_dates = pd.to_datetime(sales["date_sold"], errors="coerce").to_numpy()
+        self.property_types = sales["house_type_name"].fillna("").astype(str).to_numpy()
+        self.prices = pd.to_numeric(sales["sold_price"], errors="coerce").to_numpy(dtype=float)
+        self.square_feet = features.square_feet(sales["house_area"]).to_numpy(dtype=float)
+        self.sale_coords = sales[["longitude", "latitude"]].apply(
+            pd.to_numeric, errors="coerce"
+        ).to_numpy(dtype=float)
+        self.valid_sales = np.isfinite(self.sale_coords).all(axis=1)
+        return self
+
+    def transform(self, homes):
+        result = pd.DataFrame(
+            index=homes.index,
+            columns=[
+                "nearby_comparable_median_price",
+                "nearby_comparable_median_price_per_sqft",
+                "nearby_comparable_count",
+                "nearby_comparable_nearest_km",
+            ],
+            dtype=float,
+        )
+        result["nearby_comparable_count"] = 0
+        if homes.empty:
+            return result
+        home_coords = homes[["longitude", "latitude"]].apply(
+            pd.to_numeric, errors="coerce"
+        ).to_numpy(dtype=float)
+        valid_homes = np.isfinite(home_coords).all(axis=1)
+        home_dates = pd.to_datetime(homes["date_listed"], errors="coerce")
+        valid_homes &= home_dates.notna().to_numpy()
+        if not valid_homes.any():
+            return result
+
+        periods = home_dates.dt.to_period("M")
+        period_values = periods.to_numpy()
+        home_types = homes["house_type_name"].fillna("").astype(str).to_numpy()
+        for period in pd.unique(period_values[valid_homes]):
+            rows = np.flatnonzero(valid_homes & (period_values == period))
+            cutoff = period.start_time.to_datetime64()
+            historical_sales = np.flatnonzero(
+                self.valid_sales & (self.sale_dates < cutoff)
+            )
+            if len(historical_sales) == 0:
+                continue
+
+            historical_labels = self.sales.index.to_numpy()[historical_sales]
+            tree_coords = self.sale_coords[historical_sales].copy()
+            tree_coords[:, 0] *= self.longitude_scale
+            label_hash = hash(pd.util.hash_pandas_object(
+                pd.Index(historical_labels), index=False
+            ).values.tobytes())
+            coords_hash = hash(tree_coords.tobytes())
+            cache_key = (period.ordinal, len(historical_sales), label_hash, coords_hash)
+            cached_tree = self.tree_cache.get(cache_key)
+            if cached_tree is None:
+                tree = cKDTree(tree_coords)
+                self.tree_cache[cache_key] = (tree, historical_labels)
+            else:
+                tree, historical_labels = cached_tree
+                historical_sales = self.sales.index.get_indexer(historical_labels)
+            query_coords = home_coords[rows].copy()
+            query_coords[:, 0] *= self.longitude_scale
+            k = min(self.candidate_count, len(historical_sales))
+            distances, candidate_positions = tree.query(query_coords, k=k)
+            distances = np.asarray(distances).reshape(len(rows), k) * self.km_per_degree
+            candidates = historical_sales[
+                np.asarray(candidate_positions).reshape(len(rows), k)
+            ]
+            date_cutoffs = home_dates.iloc[rows].to_numpy()[:, np.newaxis]
+            matching = (
+                (distances <= self.radius_km)
+                & (self.sale_dates[candidates] < date_cutoffs)
+                & (self.property_types[candidates] == home_types[rows, np.newaxis])
+            )
+            candidate_prices = self.prices[candidates]
+            candidate_sizes = self.square_feet[candidates]
+            matching &= np.isfinite(candidate_prices) & (candidate_prices > 0)
+            counts = matching.sum(axis=1)
+            has_comparables = counts > 0
+
+            median_prices = np.full(len(rows), np.nan)
+            median_prices[has_comparables] = np.nanmedian(
+                np.where(matching[has_comparables], candidate_prices[has_comparables], np.nan),
+                axis=1,
+            )
+            valid_size = np.isfinite(candidate_sizes) & (candidate_sizes > 0)
+            ppsf_matches = matching & valid_size
+            has_ppsf = ppsf_matches.any(axis=1)
+            median_ppsf = np.full(len(rows), np.nan)
+            median_ppsf[has_ppsf] = np.nanmedian(
+                np.where(
+                    ppsf_matches[has_ppsf],
+                    candidate_prices[has_ppsf] / candidate_sizes[has_ppsf],
+                    np.nan,
+                ),
+                axis=1,
+            )
+            nearest_distances = np.min(
+                np.where(matching, distances, np.inf), axis=1
+            )
+
+            result.iloc[rows, result.columns.get_loc("nearby_comparable_median_price")] = median_prices
+            result.iloc[
+                rows, result.columns.get_loc("nearby_comparable_median_price_per_sqft")
+            ] = median_ppsf
+            result.iloc[rows, result.columns.get_loc("nearby_comparable_count")] = counts
+            result.iloc[
+                rows, result.columns.get_loc("nearby_comparable_nearest_km")
+            ] = np.where(has_comparables, nearest_distances, np.nan)
+        return result
