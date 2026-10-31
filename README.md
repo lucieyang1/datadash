@@ -28,14 +28,23 @@ Prefer R? See `r/baseline.R`.
 ```
 python run.py validate --experiment baseline-v1   # test on Dec 2025 to May 2026
 python run.py report --experiment baseline-v1     # results table and a figure
+python run.py ensemble --experiment six-model-v1  # tune six regressors and blend them
 python run.py predict    # write both submission files
 python run.py check      # check them
 ```
 
 Each validation experiment is saved under
 `outputs/experiments/<name>/` with its own predictions, report, and figure.
-Experiment names must be unique; validation will stop rather than overwrite an
-existing experiment. Omit `--experiment NAME` to create a timestamped experiment;
+The `ensemble` command is a separate experiment: it tunes Lasso, Ridge, SVR,
+Gradient Boosting, LightGBM, and XGBoost on a chronological tuning window, then
+optimizes nonnegative blend weights on a later window. It writes each model's
+predictions, the ensemble predictions, selected parameters, weights, and MAPE
+scores to `outputs/experiments/<name>/`. The blend-window scores are used to
+choose its weights, so use the existing walk-forward `validate` workflow for
+an unbiased comparison before changing the default model.
+Experiment names must be unique; validation and ensemble runs will stop rather
+than overwrite an existing experiment. Omit `--experiment NAME` to create a
+timestamped experiment;
 `python run.py report` then reports the most recently validated experiment.
 
 On Windows, use `py` if `python` is not found.

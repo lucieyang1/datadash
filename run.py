@@ -2,6 +2,7 @@
 
     python run.py validate [--experiment NAME]   test models in an isolated run folder
     python run.py report [--experiment NAME]     score an experiment and draw its figure
+    python run.py ensemble [--experiment NAME]   tune and blend six regressors
     python run.py predict    predict the test homes and write the two submission files
     python run.py check      check the submission files before you hand them in
 
@@ -17,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 import data
+import ensemble as ensemble_experiment
 import models
 from check_submission import check_all
 
@@ -198,7 +200,19 @@ def check():
     return check_all(ROOT / "submissions")
 
 
-COMMANDS = {"validate": validate, "report": report, "predict": predict, "check": check}
+def run_ensemble(experiment=None):
+    experiment = experiment or datetime.now().strftime("ensemble-%Y%m%d-%H%M%S-%f")
+    experiment_dir(experiment)
+    ensemble_experiment.run(experiment, ROOT)
+
+
+COMMANDS = {
+    "validate": validate,
+    "report": report,
+    "ensemble": run_ensemble,
+    "predict": predict,
+    "check": check,
+}
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
@@ -206,7 +220,7 @@ if __name__ == "__main__":
     command = sys.argv[1]
     if command in {"predict", "check"} and len(sys.argv) != 2:
         sys.exit(__doc__)
-    if command in {"validate", "report"}:
+    if command in {"validate", "report", "ensemble"}:
         if len(sys.argv) == 2:
             experiment = None
         elif len(sys.argv) == 4 and sys.argv[2] == "--experiment":

@@ -1,0 +1,138 @@
+{
+  "models": [
+    "lasso",
+    "ridge",
+    "svr",
+    "gbm",
+    "lgbm",
+    "xgboost"
+  ],
+  "objective": "mean absolute percentage error",
+  "split_method": "chronological 70% training, 15% tuning, 15% blend validation",
+  "tracks": {
+    "off_market": {
+      "tuning_period": [
+        "2024-10-01",
+        "2025-07-31"
+      ],
+      "blend_period": [
+        "2025-08-01",
+        "2026-05-31"
+      ],
+      "tuning_mape": {
+        "lasso": 20.5576,
+        "ridge": 17.9234,
+        "svr": 38.9682,
+        "gbm": 21.186,
+        "lgbm": 14.3854,
+        "xgboost": 15.0374
+      },
+      "blend_mape": {
+        "lasso": 22.2593,
+        "ridge": 18.9428,
+        "svr": 43.0878,
+        "gbm": 22.9355,
+        "lgbm": 14.9283,
+        "xgboost": 15.6849,
+        "ensemble": 14.9283
+      },
+      "best_params": {
+        "lasso": {
+          "alpha": 0.001
+        },
+        "ridge": {
+          "alpha": 1.0
+        },
+        "svr": {
+          "C": 2.0,
+          "epsilon": 0.05
+        },
+        "gbm": {
+          "n_estimators": 150,
+          "learning_rate": 0.05,
+          "max_depth": 3
+        },
+        "lgbm": {
+          "n_estimators": 500,
+          "learning_rate": 0.03,
+          "num_leaves": 31
+        },
+        "xgboost": {
+          "n_estimators": 500,
+          "learning_rate": 0.03,
+          "max_depth": 8
+        }
+      },
+      "ensemble_weights": {
+        "lasso": 0.0,
+        "ridge": 0.0,
+        "svr": 0.0,
+        "gbm": 0.0,
+        "lgbm": 1.0,
+        "xgboost": 0.0
+      }
+    },
+    "list_aware": {
+      "tuning_period": [
+        "2024-10-01",
+        "2025-07-31"
+      ],
+      "blend_period": [
+        "2025-08-01",
+        "2026-05-31"
+      ],
+      "tuning_mape": {
+        "lasso": 15.0104,
+        "ridge": 13.5709,
+        "svr": 38.6335,
+        "gbm": 6.5624,
+        "lgbm": 6.1528,
+        "xgboost": 6.1469
+      },
+      "blend_mape": {
+        "lasso": 16.0908,
+        "ridge": 14.2787,
+        "svr": 42.7331,
+        "gbm": 6.3095,
+        "lgbm": 5.6634,
+        "xgboost": 5.674,
+        "ensemble": 5.6385
+      },
+      "best_params": {
+        "lasso": {
+          "alpha": 0.001
+        },
+        "ridge": {
+          "alpha": 100.0
+        },
+        "svr": {
+          "C": 2.0,
+          "epsilon": 0.05
+        },
+        "gbm": {
+          "n_estimators": 150,
+          "learning_rate": 0.05,
+          "max_depth": 3
+        },
+        "lgbm": {
+          "n_estimators": 500,
+          "learning_rate": 0.03,
+          "num_leaves": 31
+        },
+        "xgboost": {
+          "n_estimators": 500,
+          "learning_rate": 0.03,
+          "max_depth": 8
+        }
+      },
+      "ensemble_weights": {
+        "lasso": 0.0,
+        "ridge": 0.0,
+        "svr": 0.0,
+        "gbm": 0.0,
+        "lgbm": 0.55491023,
+        "xgboost": 0.44508977
+      }
+    }
+  }
+}
