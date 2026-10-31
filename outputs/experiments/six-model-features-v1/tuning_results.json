@@ -1,0 +1,148 @@
+{
+  "models": [
+    "lasso",
+    "ridge",
+    "svr",
+    "gbm",
+    "lgbm",
+    "xgboost"
+  ],
+  "objective": "mean absolute percentage error",
+  "split_method": "chronological 70% training, 15% tuning, 15% blend validation",
+  "comparable_features": [
+    "past-only nearby same-property-type median price, price per sqft, count, and nearest distance within 3 km",
+    "past-only same-community and same-property-type median price, price per sqft, and count"
+  ],
+  "engineered_features": [
+    "rectangular lot area, log lot area, perimeter, aspect ratio, and interior floor-area-to-lot-area ratio",
+    "log interior area, bedrooms per 1,000 sqft, washrooms and parking per bedroom, and total bedrooms plus washrooms",
+    "45-degree rotated local coordinates",
+    "comparable price-per-sqft times subject area, nearby-to-community comparable ratios, and list-price-per-sqft and list-price-to-comparable ratios when list price is available"
+  ],
+  "tracks": {
+    "off_market": {
+      "tuning_period": [
+        "2024-10-01",
+        "2025-07-31"
+      ],
+      "blend_period": [
+        "2025-08-01",
+        "2026-05-31"
+      ],
+      "tuning_mape": {
+        "lasso": 14.6599,
+        "ridge": 14.2481,
+        "svr": 38.5929,
+        "gbm": 14.4987,
+        "lgbm": 12.9582,
+        "xgboost": 12.5431
+      },
+      "blend_mape": {
+        "lasso": 15.4051,
+        "ridge": 14.9255,
+        "svr": 42.6841,
+        "gbm": 15.2824,
+        "lgbm": 12.8831,
+        "xgboost": 12.4738,
+        "ensemble": 12.4738
+      },
+      "best_params": {
+        "lasso": {
+          "alpha": 0.001
+        },
+        "ridge": {
+          "alpha": 100.0
+        },
+        "svr": {
+          "C": 2.0,
+          "epsilon": 0.05
+        },
+        "gbm": {
+          "n_estimators": 150,
+          "learning_rate": 0.05,
+          "max_depth": 3
+        },
+        "lgbm": {
+          "n_estimators": 500,
+          "learning_rate": 0.03,
+          "num_leaves": 31
+        },
+        "xgboost": {
+          "n_estimators": 500,
+          "learning_rate": 0.03,
+          "max_depth": 8
+        }
+      },
+      "ensemble_weights": {
+        "lasso": 0.0,
+        "ridge": 0.0,
+        "svr": 0.0,
+        "gbm": 0.0,
+        "lgbm": 0.0,
+        "xgboost": 1.0
+      }
+    },
+    "list_aware": {
+      "tuning_period": [
+        "2024-10-01",
+        "2025-07-31"
+      ],
+      "blend_period": [
+        "2025-08-01",
+        "2026-05-31"
+      ],
+      "tuning_mape": {
+        "lasso": 7.1711,
+        "ridge": 6.7759,
+        "svr": 38.2346,
+        "gbm": 6.458,
+        "lgbm": 6.0627,
+        "xgboost": 5.9939
+      },
+      "blend_mape": {
+        "lasso": 7.2885,
+        "ridge": 6.8082,
+        "svr": 42.217,
+        "gbm": 6.2685,
+        "lgbm": 5.5011,
+        "xgboost": 5.4478,
+        "ensemble": 5.4308
+      },
+      "best_params": {
+        "lasso": {
+          "alpha": 0.001
+        },
+        "ridge": {
+          "alpha": 100.0
+        },
+        "svr": {
+          "C": 2.0,
+          "epsilon": 0.05
+        },
+        "gbm": {
+          "n_estimators": 150,
+          "learning_rate": 0.05,
+          "max_depth": 3
+        },
+        "lgbm": {
+          "n_estimators": 500,
+          "learning_rate": 0.03,
+          "num_leaves": 31
+        },
+        "xgboost": {
+          "n_estimators": 500,
+          "learning_rate": 0.03,
+          "max_depth": 8
+        }
+      },
+      "ensemble_weights": {
+        "lasso": 0.0,
+        "ridge": 0.0,
+        "svr": 0.0,
+        "gbm": 0.0,
+        "lgbm": 0.33015303,
+        "xgboost": 0.66984697
+      }
+    }
+  }
+}

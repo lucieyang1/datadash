@@ -42,6 +42,37 @@ predictions, the ensemble predictions, selected parameters, weights, and MAPE
 scores to `outputs/experiments/<name>/`. The blend-window scores are used to
 choose its weights, so use the existing walk-forward `validate` workflow for
 an unbiased comparison before changing the default model.
+Both comparable feature sets are built from each fold's training sales only:
+nearby same-type sales within 3 km and same-community, same-type sales, with
+same-month sales excluded.
+The comparable-feature run is saved in
+`outputs/experiments/six-model-comps-v1/`. On its Aug 2025-May 2026 blend
+window, MAPE was 12.52% off-market and 5.53% list-aware. Blend weights were
+optimized on that same window, so these scores are exploratory rather than an
+unbiased estimate of future performance.
+The follow-up `six-model-features-v1` adds rectangular lot area (frontage x
+depth), lot perimeter and aspect ratio, floor area relative to lot area,
+log-scaled home/lot area, room and parking ratios, rotated coordinates, and
+price-per-square-foot/list-to-comparable features. On the same blend window,
+MAPE was 12.47% off-market and 5.43% list-aware (versus 12.52% and 5.53%
+before these additions). Blend weights were fit on this window, so use
+walk-forward validation before concluding the improvement generalizes.
+The `six-model-tfidf-v1` experiment also vectorizes remarks with up to 1,200
+training-fold TF-IDF unigram/bigram terms; Gradient Boosting uses a
+16-component SVD reduction of those text features. The text vocabulary is
+learned only from each model's training rows. To keep the RBF SVR runtime
+manageable, it fits on a deterministic 1,200-row training sample. On the same
+blend window, this run had 11.88% off-market and 5.39% list-aware MAPE versus
+12.47% and 5.43% without TF-IDF. These blend-window results are exploratory
+because the blending weights were selected on that period; use walk-forward
+validation to assess whether the change generalizes.
+The `six-model-trends-v1` run adds exponential recency-weighted price-per-square-foot
+features over the prior 3 months, a 3-to-12-month comparison window, their
+relative trend, and recent sale counts, grouped by community/property type and
+property type overall. All windows end at the start of the listing month. On
+the same blend window, adding these features changed MAPE from 11.88% to 12.49%
+off-market and 5.39% to 5.49% list-aware. They did not improve this experiment's
+blend score, so treat them as an experimental candidate rather than a default.
 Experiment names must be unique; validation and ensemble runs will stop rather
 than overwrite an existing experiment. Omit `--experiment NAME` to create a
 timestamped experiment;

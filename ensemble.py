@@ -16,20 +16,27 @@ from sklearn.preprocessing import (
     OrdinalEncoder,
     StandardScaler,
 )
+from sklearn.decomposition import TruncatedSVD
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.svm import SVR
 from xgboost import XGBRegressor
 
 import data
 import features
+from models import CommunityComparableFeatures, NearbyComparableFeatures
 
 MODEL_NAMES = ("lasso", "ridge", "svr", "gbm", "lgbm", "xgboost")
+TEXT_COLUMN = "remarks"
+TFIDF_MAX_FEATURES = 1200
+TFIDF_MIN_DF = 2
+TFIDF_N_COMPONENTS = 16
 CATEGORICAL_COLUMNS = (
     "house_type_name",
     "house_style",
     "municipality",
     "community",
 )
-NUMERIC_COLUMNS = (
+BASE_NUMERIC_COLUMNS = (
     "bedrooms",
     "washrooms",
     "parking_total",
@@ -39,9 +46,55 @@ NUMERIC_COLUMNS = (
     "lot_depth",
     "longitude",
     "latitude",
+)
+DERIVED_NUMERIC_COLUMNS = (
     "months",
     "month_sin",
     "month_cos",
+    "rotated_longitude",
+    "rotated_latitude",
+    "log_house_area",
+    "lot_area_sqft",
+    "log_lot_area_sqft",
+    "lot_perimeter_ft",
+    "lot_aspect_ratio",
+    "floor_area_to_lot_area",
+    "bedrooms_per_1000_sqft",
+    "washrooms_per_bedroom",
+    "parking_per_bedroom",
+    "total_bedrooms_washrooms",
+    "nearby_comparable_median_price",
+    "nearby_comparable_median_price_per_sqft",
+    "nearby_comparable_count",
+    "nearby_comparable_nearest_km",
+    "nearby_comparable_estimated_price",
+    "nearby_to_community_comparable_price_ratio",
+    "nearby_to_community_comparable_ppsf_ratio",
+    "community_comparable_median_price",
+    "community_comparable_median_price_per_sqft",
+    "community_comparable_count",
+    "community_comparable_estimated_price",
+    "community_type_ppsf_recent_weighted_3m",
+    "community_type_ppsf_prior_weighted_3_12m",
+    "community_type_ppsf_trend_3m_vs_prior",
+    "community_type_sales_count_3m",
+    "property_type_ppsf_recent_weighted_3m",
+    "property_type_ppsf_prior_weighted_3_12m",
+    "property_type_ppsf_trend_3m_vs_prior",
+    "property_type_sales_count_3m",
+    "list_price_per_sqft",
+    "list_price_to_nearby_comparable",
+    "list_price_to_community_comparable",
+)
+NUMERIC_COLUMNS = BASE_NUMERIC_COLUMNS + DERIVED_NUMERIC_COLUMNS
+COMPARABLE_COLUMNS = (
+    "nearby_comparable_median_price",
+    "nearby_comparable_median_price_per_sqft",
+    "nearby_comparable_count",
+    "nearby_comparable_nearest_km",
+    "community_comparable_median_price",
+    "community_comparable_median_price_per_sqft",
+    "community_comparable_count",
 )
 TRIALS = {
     "lasso": [{"alpha": alpha} for alpha in (0.001, 0.01, 0.1)],
@@ -64,27 +117,259 @@ TRIALS = {
         for trees, rate, depth in ((300, 0.05, 6), (500, 0.03, 8))
     ],
 }
-FIT_LIMITS = {"svr": 5_000, "gbm": 30_000}
+FIT_LIMITS = {"svr": 1_200, "gbm": 30_000}
 
 
-def make_features(homes, track):
+class ComparableFeatureBuilder:
+    """Generate leak-safe neighborhood and community comparable summaries."""
+
+    def fit(self, sales):
+        self.nearby = NearbyComparableFeatures().fit(sales)
+        self.community = CommunityComparableFeatures().fit(sales)
+        return self
+
+    def transform(self, homes):
+        return pd.concat(
+            [self.nearby.transform(homes), self.community.transform(homes)],
+            axis=1,
+        )
+
+
+class MarketPriceTrendFeatures:
+    """Past-only recency-weighted price-per-square-foot trends."""
+
+    half_life_days = 45.0
+    recent_months = 3
+    history_months = 12
+
+    def fit(self, sales):
+        sale_dates = pd.to_datetime(sales["date_sold"], errors="coerce")
+        prices = pd.to_numeric(sales["sold_price"], errors="coerce").to_numpy(
+            dtype=float
+        )
+        sizes = features.square_feet(sales["house_area"]).to_numpy(dtype=float)
+        ppsf = np.divide(
+            prices,
+            sizes,
+            out=np.full(len(prices), np.nan),
+            where=sizes > 0,
+        )
+        valid = (
+            sale_dates.notna().to_numpy()
+            & np.isfinite(ppsf)
+            & (prices > 0)
+            & (sizes > 0)
+        )
+        dates = sale_dates.to_numpy(dtype="datetime64[ns]")[valid]
+        ppsf = ppsf[valid]
+        communities = sales["community"].fillna("").astype(str).to_numpy()[valid]
+        property_types = sales["house_type_name"].fillna("").astype(str).to_numpy()[
+            valid
+        ]
+        self.sales_by_group = {"community_type": {}, "property_type": {}}
+        groups = {
+            "community_type": zip(communities, property_types),
+            "property_type": ((property_type,) for property_type in property_types),
+        }
+        for dimension, keys in groups.items():
+            grouped = {}
+            for position, key in enumerate(keys):
+                if "" not in key:
+                    grouped.setdefault(key, []).append(position)
+            for key, positions in grouped.items():
+                positions = np.asarray(positions)
+                order = np.argsort(dates[positions], kind="stable")
+                selected = positions[order]
+                self.sales_by_group[dimension][key] = (
+                    dates[selected],
+                    ppsf[selected],
+                )
+        return self
+
+    @staticmethod
+    def _weighted_mean(dates, values, start, end, cutoff):
+        left = np.searchsorted(dates, start.to_datetime64(), side="left")
+        right = np.searchsorted(dates, end.to_datetime64(), side="left")
+        if right <= left:
+            return np.nan, 0
+        selected_dates = dates[left:right]
+        selected_values = values[left:right]
+        age_days = (
+            cutoff.to_datetime64() - selected_dates
+        ) / np.timedelta64(1, "D")
+        weights = np.exp2(-age_days / MarketPriceTrendFeatures.half_life_days)
+        return float(np.average(selected_values, weights=weights)), int(right - left)
+
+    def transform(self, homes):
+        columns = {}
+        for dimension in ("community_type", "property_type"):
+            prefix = dimension
+            columns.update({
+                f"{prefix}_ppsf_recent_weighted_3m": np.full(len(homes), np.nan),
+                f"{prefix}_ppsf_prior_weighted_3_12m": np.full(len(homes), np.nan),
+                f"{prefix}_ppsf_trend_3m_vs_prior": np.full(len(homes), np.nan),
+                f"{prefix}_sales_count_3m": np.zeros(len(homes), dtype=float),
+            })
+        if homes.empty:
+            return pd.DataFrame(columns, index=homes.index)
+
+        listing_dates = pd.to_datetime(homes["date_listed"], errors="coerce")
+        communities = homes["community"].fillna("").astype(str).to_numpy()
+        property_types = homes["house_type_name"].fillna("").astype(str).to_numpy()
+        periods = listing_dates.dt.to_period("M")
+        period_values = periods.to_numpy()
+        valid_homes = listing_dates.notna().to_numpy() & (property_types != "")
+
+        for dimension in ("community_type", "property_type"):
+            query_keys = (
+                list(zip(communities, property_types))
+                if dimension == "community_type"
+                else [(property_type,) for property_type in property_types]
+            )
+            valid_dimension = valid_homes.copy()
+            if dimension == "community_type":
+                valid_dimension &= communities != ""
+            grouped_homes = pd.DataFrame({
+                "period": period_values[valid_dimension],
+                "key": [query_keys[i] for i in np.flatnonzero(valid_dimension)],
+                "position": np.flatnonzero(valid_dimension),
+            })
+            for (period, key), group in grouped_homes.groupby(
+                ["period", "key"], sort=False
+            ):
+                sales_group = self.sales_by_group[dimension].get(key)
+                if sales_group is None:
+                    continue
+                rows = group["position"].to_numpy()
+                cutoff = period.start_time
+                recent_start = cutoff - pd.DateOffset(
+                    months=self.recent_months
+                )
+                history_start = cutoff - pd.DateOffset(
+                    months=self.history_months
+                )
+                dates, values = sales_group
+                recent_mean, recent_count = self._weighted_mean(
+                    dates, values, recent_start, cutoff, cutoff
+                )
+                prior_mean, _ = self._weighted_mean(
+                    dates, values, history_start, recent_start, cutoff
+                )
+                columns[f"{dimension}_ppsf_recent_weighted_3m"][rows] = recent_mean
+                columns[f"{dimension}_ppsf_prior_weighted_3_12m"][rows] = prior_mean
+                columns[f"{dimension}_sales_count_3m"][rows] = recent_count
+                if np.isfinite(recent_mean) and np.isfinite(prior_mean) and prior_mean > 0:
+                    columns[f"{dimension}_ppsf_trend_3m_vs_prior"][rows] = (
+                        recent_mean / prior_mean - 1
+                    )
+
+        return pd.DataFrame(columns, index=homes.index)
+
+
+def make_features(homes, track, comparables=None, market_trends=None):
     """Build shared, answer-safe features for both prediction tracks."""
     numeric = pd.DataFrame(index=homes.index)
-    for column in NUMERIC_COLUMNS:
+    for column in BASE_NUMERIC_COLUMNS:
         if column == "house_area":
             numeric[column] = features.square_feet(homes[column])
-        elif column in homes:
+        else:
             numeric[column] = pd.to_numeric(homes[column], errors="coerce")
 
-    if track == "list_aware":
-        numeric["list_price"] = pd.to_numeric(homes["list_price"], errors="coerce")
+    front = numeric["lot_front"]
+    depth = numeric["lot_depth"]
+    valid_lot = (front > 0) & (depth > 0)
+    lot_area = (front * depth).where(valid_lot)
+    numeric["lot_area_sqft"] = lot_area
+    numeric["log_lot_area_sqft"] = np.log1p(lot_area)
+    numeric["lot_perimeter_ft"] = (2 * (front + depth)).where(valid_lot)
+    numeric["lot_aspect_ratio"] = (
+        pd.concat([front, depth], axis=1).max(axis=1)
+        / pd.concat([front, depth], axis=1).min(axis=1).where(valid_lot)
+    )
+    numeric["floor_area_to_lot_area"] = (
+        numeric["house_area"] / lot_area
+    ).where(valid_lot)
+    numeric["log_house_area"] = np.log1p(numeric["house_area"].where(
+        numeric["house_area"] > 0
+    ))
+    numeric["bedrooms_per_1000_sqft"] = (
+        1000 * numeric["bedrooms"] / numeric["house_area"].where(
+            numeric["house_area"] > 0
+        )
+    )
+    numeric["washrooms_per_bedroom"] = (
+        numeric["washrooms"] / numeric["bedrooms"].where(numeric["bedrooms"] > 0)
+    )
+    numeric["parking_per_bedroom"] = (
+        numeric["parking_total"] / numeric["bedrooms"].where(
+            numeric["bedrooms"] > 0
+        )
+    )
+    numeric["total_bedrooms_washrooms"] = (
+        numeric["bedrooms"] + numeric["washrooms"]
+    )
+    numeric["rotated_longitude"] = (
+        numeric["longitude"] * 0.72 + numeric["latitude"]
+    ) * np.sqrt(0.5)
+    numeric["rotated_latitude"] = (
+        numeric["latitude"] - numeric["longitude"] * 0.72
+    ) * np.sqrt(0.5)
+
     listed = pd.to_datetime(homes["date_listed"], errors="coerce")
     numeric["months"] = (listed - pd.Timestamp("2021-01-01")).dt.days / 30.44
     month_angle = 2 * np.pi * (listed.dt.month - 1) / 12
     numeric["month_sin"] = np.sin(month_angle)
     numeric["month_cos"] = np.cos(month_angle)
+    comparable_values = (
+        comparables.transform(homes)
+        if comparables is not None
+        else pd.DataFrame(np.nan, index=homes.index, columns=COMPARABLE_COLUMNS)
+    )
+    numeric = numeric.join(comparable_values)
+    if market_trends is not None:
+        numeric = numeric.join(market_trends.transform(homes))
+    else:
+        trend_columns = [
+            column for column in DERIVED_NUMERIC_COLUMNS
+            if column.startswith(("community_type_", "property_type_"))
+        ]
+        numeric[trend_columns] = np.nan
+    for location in ("nearby", "community"):
+        ppsf = numeric[f"{location}_comparable_median_price_per_sqft"]
+        estimated = ppsf * numeric["house_area"]
+        numeric[f"{location}_comparable_estimated_price"] = estimated
+    numeric["nearby_to_community_comparable_price_ratio"] = (
+        numeric["nearby_comparable_median_price"]
+        / numeric["community_comparable_median_price"].where(
+            numeric["community_comparable_median_price"] > 0
+        )
+    )
+    numeric["nearby_to_community_comparable_ppsf_ratio"] = (
+        numeric["nearby_comparable_median_price_per_sqft"]
+        / numeric["community_comparable_median_price_per_sqft"].where(
+            numeric["community_comparable_median_price_per_sqft"] > 0
+        )
+    )
+    if track == "list_aware":
+        numeric["list_price"] = pd.to_numeric(homes["list_price"], errors="coerce")
+        numeric["list_price_per_sqft"] = (
+            numeric["list_price"]
+            / numeric["house_area"].where(numeric["house_area"] > 0)
+        )
+        for location in ("nearby", "community"):
+            comparable_price = numeric[f"{location}_comparable_median_price"]
+            numeric[f"list_price_to_{location}_comparable"] = (
+                numeric["list_price"] / comparable_price.where(comparable_price > 0)
+            )
+    else:
+        numeric["list_price_per_sqft"] = np.nan
+        numeric["list_price_to_nearby_comparable"] = np.nan
+        numeric["list_price_to_community_comparable"] = np.nan
+    numeric = numeric.replace([np.inf, -np.inf], np.nan)
     categories = homes[list(CATEGORICAL_COLUMNS)].fillna("(missing)").astype(str)
-    return pd.concat([numeric, categories], axis=1)
+    remarks = homes.get(TEXT_COLUMN, pd.Series("", index=homes.index))
+    text = remarks.fillna("").astype(str).rename(TEXT_COLUMN)
+    return pd.concat([numeric, categories, text], axis=1)
 
 
 def _preprocessor(model_name, track):
@@ -102,19 +387,34 @@ def _preprocessor(model_name, track):
                 handle_unknown="use_encoded_value", unknown_value=-1
             )),
         ])
-        return ColumnTransformer([
-            ("numeric", numeric_pipeline, numeric_columns),
-            ("categorical", category_pipeline, list(CATEGORICAL_COLUMNS)),
+        text_steps = [("tfidf", _tfidf_vectorizer()), (
+            "svd", TruncatedSVD(n_components=TFIDF_N_COMPONENTS, random_state=0)
+        )]
+    else:
+        category_pipeline = Pipeline([
+            ("imputer", SimpleImputer(strategy="constant", fill_value="(missing)")),
+            ("encoder", OneHotEncoder(handle_unknown="ignore")),
         ])
-
-    category_pipeline = Pipeline([
-        ("imputer", SimpleImputer(strategy="constant", fill_value="(missing)")),
-        ("encoder", OneHotEncoder(handle_unknown="ignore")),
-    ])
+        text_steps = [("tfidf", _tfidf_vectorizer())]
     return ColumnTransformer([
         ("numeric", numeric_pipeline, numeric_columns),
         ("categorical", category_pipeline, list(CATEGORICAL_COLUMNS)),
+        ("remarks", Pipeline(text_steps), TEXT_COLUMN),
     ])
+
+
+def _tfidf_vectorizer():
+    return TfidfVectorizer(
+        strip_accents="unicode",
+        lowercase=True,
+        stop_words="english",
+        ngram_range=(1, 2),
+        min_df=TFIDF_MIN_DF,
+        max_df=0.98,
+        max_features=TFIDF_MAX_FEATURES,
+        sublinear_tf=True,
+        dtype=np.float32,
+    )
 
 
 def make_pipeline(model_name, track, params):
@@ -158,8 +458,8 @@ def _sample_training_rows(frame, model_name):
     return frame.iloc[positions]
 
 
-def _predict_prices(model, model_name, homes, track):
-    transformed = model.named_steps["features"].transform(make_features(homes, track))
+def _predict_prices(model, model_name, homes_features):
+    transformed = model.named_steps["features"].transform(homes_features)
     if model_name == "lgbm":
         prediction = model.named_steps["regressor"].booster_.predict(transformed)
     else:
@@ -167,14 +467,23 @@ def _predict_prices(model, model_name, homes, track):
     return np.exp(np.clip(prediction, np.log(10_000), np.log(100_000_000)))
 
 
-def _fit_predict(model_name, params, track, train, homes):
+def _fit_predict(
+    model_name, params, track, train, homes, train_features=None, homes_features=None
+):
     fit_rows = _sample_training_rows(train, model_name)
+    if train_features is None or homes_features is None:
+        comparables = ComparableFeatureBuilder().fit(train)
+        market_trends = MarketPriceTrendFeatures().fit(train)
+        train_features = make_features(train, track, comparables, market_trends)
+        homes_features = make_features(
+            homes, track, comparables, market_trends
+        )
     model = make_pipeline(model_name, track, params)
     model.fit(
-        make_features(fit_rows, track),
+        train_features.loc[fit_rows.index],
         np.log(pd.to_numeric(fit_rows["sold_price"], errors="coerce").to_numpy()),
     )
-    return _predict_prices(model, model_name, homes, track)
+    return _predict_prices(model, model_name, homes_features)
 
 
 def _mape(actual, predicted):
@@ -232,6 +541,28 @@ def run(experiment, root):
     for track in ("off_market", "list_aware"):
         tuning_answers = tuning_homes["sold_price"].to_numpy(dtype=float)
         blend_answers = blend_homes["sold_price"].to_numpy(dtype=float)
+        tuning_comparables = ComparableFeatureBuilder().fit(tuning_train)
+        tuning_market_trends = MarketPriceTrendFeatures().fit(tuning_train)
+        tuning_train_features = make_features(
+            tuning_train, track, tuning_comparables, tuning_market_trends
+        )
+        tuning_homes_features = make_features(
+            data.hide_answers(tuning_homes, track),
+            track,
+            tuning_comparables,
+            tuning_market_trends,
+        )
+        blend_comparables = ComparableFeatureBuilder().fit(blend_train)
+        blend_market_trends = MarketPriceTrendFeatures().fit(blend_train)
+        blend_train_features = make_features(
+            blend_train, track, blend_comparables, blend_market_trends
+        )
+        blend_homes_features = make_features(
+            data.hide_answers(blend_homes, track),
+            track,
+            blend_comparables,
+            blend_market_trends,
+        )
         best_params = {}
         tuning_scores = {}
 
@@ -241,6 +572,7 @@ def run(experiment, root):
                 predicted = _fit_predict(
                     model_name, params, track, tuning_train,
                     data.hide_answers(tuning_homes, track),
+                    tuning_train_features, tuning_homes_features,
                 )
                 candidates.append((_mape(tuning_answers, predicted), params))
             score, params = min(candidates, key=lambda item: item[0])
@@ -253,6 +585,7 @@ def run(experiment, root):
             blend_predictions[model_name] = _fit_predict(
                 model_name, best_params[model_name], track, blend_train,
                 data.hide_answers(blend_homes, track),
+                blend_train_features, blend_homes_features,
             )
         prediction_matrix = np.column_stack(
             [blend_predictions[name] for name in MODEL_NAMES]
@@ -298,6 +631,31 @@ def run(experiment, root):
         "models": list(MODEL_NAMES),
         "objective": "mean absolute percentage error",
         "split_method": "chronological 70% training, 15% tuning, 15% blend validation",
+        "comparable_features": [
+            "past-only nearby same-property-type median price, price per sqft, count, and nearest distance within 3 km",
+            "past-only same-community and same-property-type median price, price per sqft, and count",
+        ],
+        "engineered_features": [
+            "rectangular lot area, log lot area, perimeter, aspect ratio, and interior floor-area-to-lot-area ratio",
+            "log interior area, bedrooms per 1,000 sqft, washrooms and parking per bedroom, and total bedrooms plus washrooms",
+            "45-degree rotated local coordinates",
+            "comparable price-per-sqft times subject area, nearby-to-community comparable ratios, and list-price-per-sqft and list-price-to-comparable ratios when list price is available",
+        ],
+        "text_features": {
+            "source": "listing remarks",
+            "method": "TF-IDF unigrams and bigrams, English stop words removed, sublinear term frequency",
+            "vocabulary": f"up to {TFIDF_MAX_FEATURES} terms, minimum document frequency {TFIDF_MIN_DF}, fit only on each model training fold",
+            "gradient_boosting": f"{TFIDF_N_COMPONENTS}-component truncated SVD of the training-fold TF-IDF matrix",
+            "svr_fit_sample_limit": FIT_LIMITS["svr"],
+        },
+        "market_trend_features": {
+            "groupings": ["community and property type", "property type"],
+            "recent_window": f"weighted average price per sqft in the {MarketPriceTrendFeatures.recent_months} months before the listing month",
+            "comparison_window": f"weighted average price per sqft from {MarketPriceTrendFeatures.recent_months} to {MarketPriceTrendFeatures.history_months} months before the listing month",
+            "recency_weighting": f"exponential decay with {MarketPriceTrendFeatures.half_life_days:g}-day half-life",
+            "trend": "recent weighted average divided by prior weighted average, minus one",
+            "cutoff": "start of listing month; same-month and later sales excluded",
+        },
         "tracks": results,
     }, indent=2))
     print(f"Wrote {output_dir.relative_to(root)}")

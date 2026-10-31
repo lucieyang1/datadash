@@ -1,0 +1,155 @@
+{
+  "models": [
+    "lasso",
+    "ridge",
+    "svr",
+    "gbm",
+    "lgbm",
+    "xgboost"
+  ],
+  "objective": "mean absolute percentage error",
+  "split_method": "chronological 70% training, 15% tuning, 15% blend validation",
+  "comparable_features": [
+    "past-only nearby same-property-type median price, price per sqft, count, and nearest distance within 3 km",
+    "past-only same-community and same-property-type median price, price per sqft, and count"
+  ],
+  "engineered_features": [
+    "rectangular lot area, log lot area, perimeter, aspect ratio, and interior floor-area-to-lot-area ratio",
+    "log interior area, bedrooms per 1,000 sqft, washrooms and parking per bedroom, and total bedrooms plus washrooms",
+    "45-degree rotated local coordinates",
+    "comparable price-per-sqft times subject area, nearby-to-community comparable ratios, and list-price-per-sqft and list-price-to-comparable ratios when list price is available"
+  ],
+  "text_features": {
+    "source": "listing remarks",
+    "method": "TF-IDF unigrams and bigrams, English stop words removed, sublinear term frequency",
+    "vocabulary": "up to 1200 terms, minimum document frequency 2, fit only on each model training fold",
+    "gradient_boosting": "16-component truncated SVD of the training-fold TF-IDF matrix",
+    "svr_fit_sample_limit": 1200
+  },
+  "tracks": {
+    "off_market": {
+      "tuning_period": [
+        "2024-10-01",
+        "2025-07-31"
+      ],
+      "blend_period": [
+        "2025-08-01",
+        "2026-05-31"
+      ],
+      "tuning_mape": {
+        "lasso": 14.4326,
+        "ridge": 13.1097,
+        "svr": 40.7232,
+        "gbm": 13.7874,
+        "lgbm": 12.0177,
+        "xgboost": 11.8653
+      },
+      "blend_mape": {
+        "lasso": 15.1967,
+        "ridge": 13.8923,
+        "svr": 44.5061,
+        "gbm": 14.9503,
+        "lgbm": 12.035,
+        "xgboost": 11.8923,
+        "ensemble": 11.884
+      },
+      "best_params": {
+        "lasso": {
+          "alpha": 0.001
+        },
+        "ridge": {
+          "alpha": 100.0
+        },
+        "svr": {
+          "C": 2.0,
+          "epsilon": 0.05
+        },
+        "gbm": {
+          "n_estimators": 150,
+          "learning_rate": 0.05,
+          "max_depth": 3
+        },
+        "lgbm": {
+          "n_estimators": 500,
+          "learning_rate": 0.03,
+          "num_leaves": 31
+        },
+        "xgboost": {
+          "n_estimators": 500,
+          "learning_rate": 0.03,
+          "max_depth": 8
+        }
+      },
+      "ensemble_weights": {
+        "lasso": 0.0,
+        "ridge": 0.0,
+        "svr": 0.0,
+        "gbm": 0.0,
+        "lgbm": 0.20051632,
+        "xgboost": 0.79948368
+      }
+    },
+    "list_aware": {
+      "tuning_period": [
+        "2024-10-01",
+        "2025-07-31"
+      ],
+      "blend_period": [
+        "2025-08-01",
+        "2026-05-31"
+      ],
+      "tuning_mape": {
+        "lasso": 7.1711,
+        "ridge": 6.6226,
+        "svr": 40.6386,
+        "gbm": 6.4066,
+        "lgbm": 5.9553,
+        "xgboost": 5.9398
+      },
+      "blend_mape": {
+        "lasso": 7.2885,
+        "ridge": 6.663,
+        "svr": 44.3918,
+        "gbm": 6.3276,
+        "lgbm": 5.4216,
+        "xgboost": 5.4285,
+        "ensemble": 5.3875
+      },
+      "best_params": {
+        "lasso": {
+          "alpha": 0.001
+        },
+        "ridge": {
+          "alpha": 100.0
+        },
+        "svr": {
+          "C": 2.0,
+          "epsilon": 0.05
+        },
+        "gbm": {
+          "n_estimators": 150,
+          "learning_rate": 0.05,
+          "max_depth": 3
+        },
+        "lgbm": {
+          "n_estimators": 500,
+          "learning_rate": 0.03,
+          "num_leaves": 31
+        },
+        "xgboost": {
+          "n_estimators": 500,
+          "learning_rate": 0.03,
+          "max_depth": 8
+        }
+      },
+      "ensemble_weights": {
+        "lasso": 0.0,
+        "ridge": 0.0,
+        "svr": 0.0,
+        "gbm": 0.0,
+        "lgbm": 0.5237104,
+        "xgboost": 0.4762896
+      }
+    }
+  }
+}
