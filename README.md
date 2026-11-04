@@ -1,5 +1,42 @@
 # SSU Data Dash: predict Toronto home prices
 
+## Results at a glance
+
+Walk-forward results use December 2025-May 2026, with each month predicted
+using only earlier sales. Lower MAPE is better. The current best model is
+community-comparable XGBoost; adding ARIMA time trends tied after rounding.
+
+| Model / experiment | Off-market MAPE | List-aware MAPE | Notes |
+|---|---:|---:|---|
+| XGBoost, community comps | 12.01% | 5.51% | Current default; [report](outputs/experiments/xgboost-community-comps-v1/reports/validation_report.md) |
+| XGBoost + ARIMA time trend | 12.01% | 5.51% | Tied after rounding; [report](outputs/experiments/xgboost-arima-v1/reports/validation_report.md) |
+| XGBoost, Optuna tuned | 12.01% | 5.51% | [report](outputs/experiments/xgb-optuna-v1/reports/validation_report.md) |
+| LightGBM, community comps | 12.32% | 5.47% | [report](outputs/experiments/lightgbm-community-comps-v1/reports/validation_report.md) |
+| LightGBM, safe nearby comps | 12.22% | 5.54% | [report](outputs/experiments/lightgbm-nearby-comps-safe-v1/reports/validation_report.md) |
+| XGBoost, nearby comps | 12.51% | 5.51% | [report](outputs/experiments/xgboost-nearby-comps/reports/validation_report.md) |
+| XGBoost, safe nearby comps | 12.59% | 5.53% | [report](outputs/experiments/xgboost-nearby-comps-safe-v2/reports/validation_report.md) |
+| XGBoost, rotated coordinates | 12.55% | 5.54% | [report](outputs/experiments/xgboost-rotated-v1/reports/validation_report.md) |
+| XGBoost, basic | 13.77% | 5.59% | [report](outputs/experiments/xgboost/reports/validation_report.md) |
+| XGBoost, word features | 13.73% | 5.56% | [report](outputs/experiments/xgboost-wordfeatures/reports/validation_report.md) |
+| Feature model | 19.23% | 5.82% | [report](outputs/experiments/feature-model/reports/validation_report.md) |
+| Spatiotemporal GAM | 16.45% | 16.45% | [report](outputs/experiments/spatiotemporal-gam/reports/validation_report.md) |
+| ConvLSTM, 60k rows | 25.24% | 26.32% | [report](outputs/experiments/convlstm-spatial-60k-v1/reports/validation_report.md) |
+| ConvLSTM, full data | 18.11% | 16.16% | [report](outputs/experiments/convlstm-spatial-full-v1/reports/validation_report.md) |
+| ConvLSTM, initial run | 70.56% | 125.35% | [report](outputs/experiments/convlstm-spatial-v1/reports/validation_report.md) |
+| XGBoost + Matérn GP (held-out residuals) | 13.29% | 5.64% | Worse than default; [report](outputs/experiments/xgboost-matern-grf-v1/reports/validation_report.md) |
+| XGBoost + Matérn GP (all-data residual field) | 13.44% | 8.02% | Worse than default; [report](outputs/experiments/xgboost-matern-grf-v2/reports/validation_report.md) |
+
+Exploratory six-model ensemble scores below use the Aug 2025-May 2026 blend
+window, which was also used to choose blend weights; they are not unbiased
+walk-forward comparisons.
+
+| Ensemble experiment | Off-market MAPE | List-aware MAPE |
+|---|---:|---:|
+| Comparable features | 12.52% | 5.53% |
+| Engineered features | 12.47% | 5.43% |
+| TF-IDF remarks | 11.88% | 5.39% |
+| Market trends | 12.49% | 5.49% |
+
 Start with the case handout, [`handout.md`](handout.md), and the judging rubric, [`rubric.md`](rubric.md).
 
 Two tracks:
