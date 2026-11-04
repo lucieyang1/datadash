@@ -7,6 +7,7 @@ scikit-learn==1.7.2
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.15.0+cpu
 lightgbm==4.6.0
+statsmodels==0.14.6
 xgboost==3.1.2
 matplotlib==3.10.9
 huggingface_hub==2.1.1

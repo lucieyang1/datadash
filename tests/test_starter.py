@@ -163,6 +163,54 @@ def test_rotated_xgboost_coordinates_use_local_longitude_scale():
     np.testing.assert_allclose(numeric["coordinate_rotated_45_y"], (y - x) * scale)
 
 
+@pytest.mark.parametrize("track", ["off_market", "list_aware"])
+def test_xgboost_matern_grf_fits_and_predicts(track, monkeypatch):
+    listings = make_listings(100)
+    homes = data.hide_answers(make_listings(6, seed=4, first_id=2000), track)
+    monkeypatch.setattr(models, "MODEL", "xgboost_matern_grf")
+
+    model = models.make_model(track)
+    model.model.set_params(n_estimators=20, n_jobs=1)
+    model.fit(listings)
+    predictions = model.predict(homes)
+    numeric, _ = model._values(homes)
+
+    assert isinstance(model, models.MaternSpatialXGBoostModel)
+    assert model.spatial_model is not None
+    assert model.spatial_model.kernel_.k1.k2.nu == 1.5
+    assert model.spatial_training_rows_ == len(listings)
+    assert {"longitude", "latitude", "coordinate_rotated_45_x",
+            "coordinate_rotated_45_y"} <= set(numeric.columns)
+    assert predictions.shape == (len(homes),)
+    assert np.isfinite(predictions).all()
+    assert (predictions > 0).all()
+
+
+@pytest.mark.parametrize("track", ["off_market", "list_aware"])
+def test_xgboost_arima_fits_and_predicts(track, monkeypatch):
+    listings = make_listings(100)
+    homes = data.hide_answers(make_listings(6, seed=5, first_id=3000), track)
+    homes["date_listed"] = pd.Timestamp("2026-09-15")
+    monkeypatch.setattr(models, "MODEL", "xgboost_arima")
+
+    model = models.make_model(track)
+    model.model.set_params(n_estimators=20, n_jobs=1)
+    model.fit(listings)
+    predictions = model.predict(homes)
+    target_month = pd.Period("2026-09", freq="M")
+
+    assert isinstance(model, models.ARIMATimeXGBoostModel)
+    assert "(all)" in model.market_series
+    assert ("Detached", target_month) in model.forecast_cache
+    assert all(
+        cached_month > model.market_series["(all)"].index.max()
+        for _, cached_month in model.forecast_cache
+    )
+    assert predictions.shape == (len(homes),)
+    assert np.isfinite(predictions).all()
+    assert (predictions > 0).all()
+
+
 def test_remarks_word_features_are_case_insensitive_and_match_whole_words():
     remarks = pd.Series([
         "A landscaped courtyard with a chef's kitchen.",

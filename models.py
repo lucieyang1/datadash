@@ -12,10 +12,13 @@ import pandas as pd
 from scipy import sparse
 from scipy.spatial import cKDTree
 from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import OneHotEncoder, SplineTransformer, StandardScaler
 from lightgbm import LGBMRegressor
+from statsmodels.tsa.arima.model import ARIMA
 from xgboost import XGBRegressor
 
 import features
@@ -33,6 +36,10 @@ def make_model(track):
         return RotatedCoordinateXGBoostModel(track)
     if MODEL == "xgboost_community_comps":
         return CommunityComparableXGBoostModel(track)
+    if MODEL == "xgboost_matern_grf":
+        return MaternSpatialXGBoostModel(track)
+    if MODEL == "xgboost_arima":
+        return ARIMATimeXGBoostModel(track)
     if MODEL == "lightgbm_community_comps":
         return CommunityComparableLightGBMModel(track)
     if MODEL == "lightgbm_nearby_comps_safe":
@@ -49,7 +56,8 @@ def make_model(track):
         raise ValueError(
             f"Unknown model {MODEL!r}; choose 'baseline', 'feature', "
             "'spatiotemporal_gam', 'xgboost', 'xgboost_rotated', or "
-            "'xgboost_community_comps', 'lightgbm_community_comps', or "
+            "'xgboost_community_comps', 'xgboost_matern_grf', "
+            "'xgboost_arima', 'lightgbm_community_comps', or "
             "'lightgbm_nearby_comps_safe', or 'convlstm_spatial'."
         )
     if track == "list_aware":
@@ -320,6 +328,174 @@ class CommunityComparableXGBoostModel(RotatedCoordinateXGBoostModel):
     def __init__(self, track, **kwargs):
         super().__init__(track, **kwargs)
         self.comparables = CommunityComparableFeatures()
+
+
+class MaternSpatialXGBoostModel(CommunityComparableXGBoostModel):
+    """Full-data community-comparable boosting plus a binned Matérn spatial field."""
+
+    spatial_cell_km = 1.0
+    spatial_strength = 0.5
+    longitude_scale = 0.72
+    km_per_degree = 111.2
+
+    def __init__(self, track, **kwargs):
+        super().__init__(track, **kwargs)
+        self.spatial_model = None
+
+    def _spatial_coordinates(self, homes):
+        coordinates = homes[["longitude", "latitude"]].apply(
+            pd.to_numeric, errors="coerce"
+        ).to_numpy(dtype=float)
+        coordinates[:, 0] *= self.longitude_scale
+        return coordinates * self.km_per_degree
+
+    def fit(self, train):
+        self.comparables.fit(train)
+        self.model.fit(
+            self._design_matrix(train, fit=True),
+            np.log(train["sold_price"]),
+        )
+        coordinates = self._spatial_coordinates(train)
+        log_prices = np.log(pd.to_numeric(train["sold_price"], errors="coerce"))
+        sale_months = pd.to_datetime(train["date_sold"], errors="coerce").dt.to_period("M")
+        property_types = train["house_type_name"].fillna("(missing)").astype(str)
+        market_baseline = log_prices.groupby(
+            [sale_months, property_types], dropna=False
+        ).transform("median")
+        spatial_residuals = log_prices - market_baseline
+        valid = (
+            np.isfinite(coordinates).all(axis=1)
+            & np.isfinite(spatial_residuals.to_numpy(dtype=float))
+        )
+        if valid.any():
+            valid_coordinates = coordinates[valid]
+            grid = np.floor(valid_coordinates / self.spatial_cell_km).astype(int)
+            cells = pd.DataFrame({
+                "grid_x": grid[:, 0],
+                "grid_y": grid[:, 1],
+                "x": valid_coordinates[:, 0],
+                "y": valid_coordinates[:, 1],
+                "residual": spatial_residuals.to_numpy(dtype=float)[valid],
+            })
+            grouped = cells.groupby(["grid_x", "grid_y"], sort=False).agg(
+                x=("x", "mean"),
+                y=("y", "mean"),
+                residual=("residual", "mean"),
+                count=("residual", "size"),
+            )
+            kernel = (
+                ConstantKernel(1.0, (0.01, 100.0))
+                * Matern(length_scale=3.0, length_scale_bounds=(0.25, 25.0), nu=1.5)
+                + WhiteKernel(noise_level=0.01, noise_level_bounds=(1e-4, 0.5))
+            )
+            self.spatial_model = GaussianProcessRegressor(
+                kernel=kernel,
+                alpha=0.01 / grouped["count"].to_numpy(dtype=float),
+                normalize_y=False,
+                n_restarts_optimizer=0,
+                random_state=0,
+            )
+            self.spatial_model.fit(
+                grouped[["x", "y"]].to_numpy(),
+                grouped["residual"].to_numpy(),
+            )
+            self.spatial_training_rows_ = int(grouped["count"].sum())
+        return self
+
+    def predict(self, homes):
+        predictions = self.model.predict(self._design_matrix(homes))
+        if self.spatial_model is not None and not homes.empty:
+            coordinates = self._spatial_coordinates(homes)
+            valid = np.isfinite(coordinates).all(axis=1)
+            if valid.any():
+                predictions[valid] += (
+                    self.spatial_strength
+                    * self.spatial_model.predict(coordinates[valid])
+                )
+        return np.exp(predictions)
+
+
+class ARIMATimeXGBoostModel(CommunityComparableXGBoostModel):
+    """Best boosted model plus a prior-only ARIMA price-per-square-foot trend."""
+
+    arima_order = (1, 1, 0)
+    minimum_months = 12
+    arima_strength = 0.25
+
+    def __init__(self, track, **kwargs):
+        super().__init__(track, **kwargs)
+        self.market_series = {}
+        self.forecast_cache = {}
+
+    def fit(self, train):
+        super().fit(train)
+        sale_dates = pd.to_datetime(train["date_sold"], errors="coerce")
+        sale_months = sale_dates.dt.to_period("M")
+        prices = pd.to_numeric(train["sold_price"], errors="coerce")
+        sizes = features.square_feet(train["house_area"])
+        valid = (
+            sale_months.notna()
+            & prices.gt(0)
+            & sizes.gt(0)
+            & np.isfinite(sizes)
+        )
+        history = pd.DataFrame({
+            "month": sale_months[valid],
+            "property_type": train.loc[valid, "house_type_name"].fillna("(missing)").astype(str),
+            "log_ppsf": np.log(prices[valid] / sizes[valid]),
+        })
+        self.market_series = {
+            property_type: group.groupby("month")["log_ppsf"].median().sort_index()
+            for property_type, group in history.groupby("property_type", sort=False)
+        }
+        self.market_series["(all)"] = history.groupby("month")["log_ppsf"].median().sort_index()
+        self.forecast_cache = {}
+        return self
+
+    def _forecast_market_change(self, property_type, target_month):
+        cache_key = (property_type, target_month)
+        if cache_key in self.forecast_cache:
+            return self.forecast_cache[cache_key]
+
+        series = self.market_series.get(property_type, self.market_series["(all)"])
+        prior = series[series.index < target_month]
+        change = 0.0
+        if len(prior) >= self.minimum_months:
+            complete_months = pd.period_range(prior.index.min(), prior.index.max(), freq="M")
+            observed_positions = prior.index.asi8
+            complete_values = np.interp(
+                complete_months.asi8,
+                observed_positions,
+                prior.to_numpy(dtype=float),
+            )
+            horizon = target_month.ordinal - complete_months[-1].ordinal
+            if horizon > 0:
+                forecast = ARIMA(
+                    complete_values,
+                    order=self.arima_order,
+                    trend="t",
+                    enforce_stationarity=True,
+                    enforce_invertibility=True,
+                ).fit().forecast(steps=horizon)
+                change = float(forecast[-1] - complete_values[-1])
+
+        self.forecast_cache[cache_key] = change
+        return change
+
+    def predict(self, homes):
+        predictions = super().predict(homes)
+        listed_dates = pd.to_datetime(homes["date_listed"], errors="coerce")
+        property_types = homes["house_type_name"].fillna("(missing)").astype(str)
+        changes = np.zeros(len(homes), dtype=float)
+        for position, (listed_date, property_type) in enumerate(
+            zip(listed_dates, property_types)
+        ):
+            if pd.notna(listed_date):
+                target_month = listed_date.to_period("M")
+                changes[position] = self._forecast_market_change(
+                    property_type, target_month
+                )
+        return predictions * np.exp(self.arima_strength * changes)
 
 
 class CommunityComparableLightGBMModel(RotatedCoordinateXGBoostModel):

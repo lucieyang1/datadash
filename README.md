@@ -83,7 +83,7 @@ On Windows, use `py` if `python` is not found.
 ## What to edit
 
 - **`features.py`**: the features.
-- **`models.py`**: set `MODEL` to `"baseline"`, `"feature"`, `"spatiotemporal_gam"`, `"xgboost"`, `"xgboost_rotated"`, `"xgboost_community_comps"`, `"lightgbm_community_comps"`, `"lightgbm_nearby_comps_safe"`, or `"convlstm_spatial"` to choose a model.
+- **`models.py`**: set `MODEL` to `"baseline"`, `"feature"`, `"spatiotemporal_gam"`, `"xgboost"`, `"xgboost_rotated"`, `"xgboost_community_comps"`, `"xgboost_matern_grf"`, `"lightgbm_community_comps"`, `"lightgbm_nearby_comps_safe"`, or `"convlstm_spatial"` to choose a model.
   The GAM-style model mirrors the supplied `mgcv::bam` formula with spline bases and Ridge
   regularization; it approximates, but does not reproduce, `bam`'s REML smoothness selection.
   XGBoost uses the same property, location, and time inputs and adds list price on the
@@ -134,6 +134,28 @@ improve every dataset. On this project's Dec 2025-May 2026
 walk-forward validation, it improved MAPE from 13.77% to 12.55% off-market and
 from 5.59% to 5.54% list-aware relative to the non-rotated XGBoost variant. Its results are in
 `outputs/experiments/xgboost-rotated-v1/`.
+
+The experimental `"xgboost_matern_grf"` model uses the community-comparable
+XGBoost model for property, time, community, and location features, trained on
+the entire training fold. It combines those predictions with a Matérn 3/2
+Gaussian spatial correction. To keep the GP tractable, all training sales
+contribute to residual means in 1 km location cells; those residuals are
+relative to the property-type and sale-month median log price. The correction
+is added at half strength. Set `MODEL` to this name and run walk-forward
+validation with a new experiment name before comparing it with the current
+default.
+
+The experimental `"xgboost_arima"` model keeps the community-comparable
+XGBoost model for property, location, and comparable-sale features. It adds a
+damped ARIMA(1,1,0) forecast of log median sale price per square foot, grouped
+by property type, using only sale months before each listing month. The ARIMA
+adjustment is fit independently from the booster and added at quarter strength.
+The default remains `"xgboost_community_comps"`; compare with walk-forward
+validation before switching. On the Dec 2025-May 2026 walk-forward, this
+variant scored 12.01% off-market and 5.51% list-aware MAPE, effectively tying
+the default at those rounded scores; the unrounded scores moved slightly in
+opposite directions. Results are in
+`outputs/experiments/xgboost-arima-v1/`.
 
 To explore which words in listing remarks are associated with higher or lower
 prices after controlling for the structured property, location, and time features,
