@@ -149,6 +149,37 @@ def test_xgboost_fits_and_predicts_for_both_tracks(
     assert ("coordinate_rotated_45_y" in model._values(homes)[0]) == rotated
 
 
+def test_default_list_aware_model_learns_sale_to_list_ratio(monkeypatch):
+    listings = make_listings(100)
+    homes = data.hide_answers(make_listings(6, seed=3, first_id=2000), "list_aware")
+    monkeypatch.setattr(models, "MODEL", "xgboost_community_comps")
+
+    model = models.make_model("list_aware")
+    assert isinstance(model, models.ListAwareCommunityComparableXGBoostModel)
+    model.model.set_params(n_estimators=20, n_jobs=1)
+    original_fit = model.model.fit
+    fitted_targets = []
+
+    def capture_fit(matrix, target):
+        fitted_targets.append(np.asarray(target))
+        return original_fit(matrix, target)
+
+    monkeypatch.setattr(model.model, "fit", capture_fit)
+    model.fit(listings)
+
+    np.testing.assert_allclose(
+        fitted_targets[0],
+        np.log(listings["sold_price"] / listings["list_price"]),
+    )
+    predictions = model.predict(homes)
+    expected = homes["list_price"].to_numpy() * np.exp(
+        model.model.predict(model._design_matrix(homes))
+    )
+    np.testing.assert_allclose(predictions, expected)
+    assert np.isfinite(predictions).all()
+    assert (predictions > 0).all()
+
+
 def test_rotated_xgboost_coordinates_use_local_longitude_scale():
     homes = make_listings(3)
     model = models.RotatedCoordinateXGBoostModel("off_market")
@@ -206,6 +237,29 @@ def test_xgboost_arima_fits_and_predicts(track, monkeypatch):
         cached_month > model.market_series["(all)"].index.max()
         for _, cached_month in model.forecast_cache
     )
+    assert predictions.shape == (len(homes),)
+    assert np.isfinite(predictions).all()
+    assert (predictions > 0).all()
+
+
+@pytest.mark.parametrize("track", ["off_market", "list_aware"])
+def test_xgboost_hashed_text_fits_and_predicts(track, monkeypatch):
+    listings = make_listings(100)
+    listings.loc[listings.index[:50], "remarks"] = "Recently renovated luxury kitchen."
+    listings.loc[listings.index[50:], "remarks"] = "Needs repairs and updating."
+    homes = data.hide_answers(make_listings(6, seed=6, first_id=4000), track)
+    monkeypatch.setattr(models, "MODEL", "xgboost_hashed_text")
+
+    model = models.make_model(track)
+    model.model.set_params(n_estimators=20, n_jobs=1)
+    model.fit(listings)
+    predictions = model.predict(homes)
+    design = model._text_design_matrix(homes)
+
+    assert isinstance(model, models.HashedTextXGBoostModel)
+    assert model.text_vectorizer.n_features == 2**18
+    assert design.shape[1] == model._design_matrix(homes).shape[1] + 2**18
+    assert design.nnz < len(homes) * 100
     assert predictions.shape == (len(homes),)
     assert np.isfinite(predictions).all()
     assert (predictions > 0).all()

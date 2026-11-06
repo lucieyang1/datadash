@@ -3,28 +3,32 @@
 ## Results at a glance
 
 Walk-forward results use December 2025-May 2026, with each month predicted
-using only earlier sales. Lower MAPE is better. The current best model is
-community-comparable XGBoost; adding ARIMA time trends tied after rounding.
+using only earlier sales. Lower MdAPE is better; MAPE breaks ties. The current
+default uses community-comparable XGBoost, with a list-price-ratio target on
+the list-aware track.
 
-| Model / experiment | Off-market MAPE | List-aware MAPE | Notes |
-|---|---:|---:|---|
-| XGBoost, community comps | 12.01% | 5.51% | Current default; [report](outputs/experiments/xgboost-community-comps-v1/reports/validation_report.md) |
-| XGBoost + ARIMA time trend | 12.01% | 5.51% | Tied after rounding; [report](outputs/experiments/xgboost-arima-v1/reports/validation_report.md) |
-| XGBoost, Optuna tuned | 12.01% | 5.51% | [report](outputs/experiments/xgb-optuna-v1/reports/validation_report.md) |
-| LightGBM, community comps | 12.32% | 5.47% | [report](outputs/experiments/lightgbm-community-comps-v1/reports/validation_report.md) |
-| LightGBM, safe nearby comps | 12.22% | 5.54% | [report](outputs/experiments/lightgbm-nearby-comps-safe-v1/reports/validation_report.md) |
-| XGBoost, nearby comps | 12.51% | 5.51% | [report](outputs/experiments/xgboost-nearby-comps/reports/validation_report.md) |
-| XGBoost, safe nearby comps | 12.59% | 5.53% | [report](outputs/experiments/xgboost-nearby-comps-safe-v2/reports/validation_report.md) |
-| XGBoost, rotated coordinates | 12.55% | 5.54% | [report](outputs/experiments/xgboost-rotated-v1/reports/validation_report.md) |
-| XGBoost, basic | 13.77% | 5.59% | [report](outputs/experiments/xgboost/reports/validation_report.md) |
-| XGBoost, word features | 13.73% | 5.56% | [report](outputs/experiments/xgboost-wordfeatures/reports/validation_report.md) |
-| Feature model | 19.23% | 5.82% | [report](outputs/experiments/feature-model/reports/validation_report.md) |
-| Spatiotemporal GAM | 16.45% | 16.45% | [report](outputs/experiments/spatiotemporal-gam/reports/validation_report.md) |
-| ConvLSTM, 60k rows | 25.24% | 26.32% | [report](outputs/experiments/convlstm-spatial-60k-v1/reports/validation_report.md) |
-| ConvLSTM, full data | 18.11% | 16.16% | [report](outputs/experiments/convlstm-spatial-full-v1/reports/validation_report.md) |
-| ConvLSTM, initial run | 70.56% | 125.35% | [report](outputs/experiments/convlstm-spatial-v1/reports/validation_report.md) |
-| XGBoost + Matérn GP (held-out residuals) | 13.29% | 5.64% | Worse than default; [report](outputs/experiments/xgboost-matern-grf-v1/reports/validation_report.md) |
-| XGBoost + Matérn GP (all-data residual field) | 13.44% | 8.02% | Worse than default; [report](outputs/experiments/xgboost-matern-grf-v2/reports/validation_report.md) |
+| Model / experiment | Off-market MdAPE | Off-market MAPE | List-aware MdAPE | List-aware MAPE | Notes |
+|---|---:|---:|---:|---:|---|
+| XGBoost, community comps + list-price ratio | 9.31% | 12.01% | 4.27% | 5.34% | Current default; [report](outputs/experiments/xgboost-list-ratio-v1/reports/validation_report.md) |
+| XGBoost, community comps (sale-price target) | 9.31% | 12.01% | 4.37% | 5.51% | [report](outputs/experiments/xgboost-community-comps-v1/reports/validation_report.md) |
+| XGBoost + ARIMA time trend | 9.29% | 12.01% | 4.34% | 5.51% | Tied after rounding; [report](outputs/experiments/xgboost-arima-v1/reports/validation_report.md) |
+| XGBoost, Optuna tuned | 9.31% | 12.01% | 4.37% | 5.51% | [report](outputs/experiments/xgb-optuna-v1/reports/validation_report.md) |
+| LightGBM, community comps | 9.66% | 12.32% | 4.32% | 5.47% | [report](outputs/experiments/lightgbm-community-comps-v1/reports/validation_report.md) |
+| LightGBM, safe nearby comps | 9.26% | 12.22% | 4.42% | 5.54% | [report](outputs/experiments/lightgbm-nearby-comps-safe-v1/reports/validation_report.md) |
+| XGBoost, nearby comps | 9.43% | 12.51% | 4.43% | 5.51% | [report](outputs/experiments/xgboost-nearby-comps/reports/validation_report.md) |
+| XGBoost, safe nearby comps | 9.53% | 12.59% | 4.42% | 5.53% | [report](outputs/experiments/xgboost-nearby-comps-safe-v2/reports/validation_report.md) |
+| XGBoost, rotated coordinates | 9.48% | 12.55% | 4.40% | 5.54% | [report](outputs/experiments/xgboost-rotated-v1/reports/validation_report.md) |
+| XGBoost, basic | 10.84% | 13.77% | 4.47% | 5.59% | [report](outputs/experiments/xgboost/reports/validation_report.md) |
+| XGBoost, word features | 10.84% | 13.73% | 4.48% | 5.56% | [report](outputs/experiments/xgboost-wordfeatures/reports/validation_report.md) |
+| Feature model | 14.87% | 19.23% | 4.61% | 5.82% | [report](outputs/experiments/feature-model/reports/validation_report.md) |
+| Spatiotemporal GAM | 12.88% | 16.45% | 12.88% | 16.45% | [report](outputs/experiments/spatiotemporal-gam/reports/validation_report.md) |
+| ConvLSTM, 60k rows | 19.61% | 25.24% | 18.62% | 26.32% | [report](outputs/experiments/convlstm-spatial-60k-v1/reports/validation_report.md) |
+| ConvLSTM, full data | 15.12% | 18.11% | 12.87% | 16.16% | [report](outputs/experiments/convlstm-spatial-full-v1/reports/validation_report.md) |
+| ConvLSTM, initial run | 43.50% | 70.56% | 36.45% | 125.35% | [report](outputs/experiments/convlstm-spatial-v1/reports/validation_report.md) |
+| XGBoost + 262k hashed text features (Ridge) | 9.34% | 12.03% | 4.83% | 6.01% | Text branch did not improve overall; [report](outputs/experiments/xgboost-hashed-text-v2/reports/validation_report.md) |
+| XGBoost + hashed text (initial SGD) | 81.14% | 158.65% | 64.74% | 72.12% | Unstable first prototype; [report](outputs/experiments/xgboost-hashed-text-v1/reports/validation_report.md) |
+| XGBoost + Matérn GP (held-out residuals) | 10.44% | 13.29% | 4.46% | 5.64% | Worse than default; [report](outputs/experiments/xgboost-matern-grf-v1/reports/validation_report.md) |
+| XGBoost + Matérn GP (all-data residual field) | 10.13% | 13.44% | 6.42% | 8.02% | Worse than default; [report](outputs/experiments/xgboost-matern-grf-v2/reports/validation_report.md) |
 
 Exploratory six-model ensemble scores below use the Aug 2025-May 2026 blend
 window, which was also used to choose blend weights; they are not unbiased
@@ -120,11 +124,12 @@ On Windows, use `py` if `python` is not found.
 ## What to edit
 
 - **`features.py`**: the features.
-- **`models.py`**: set `MODEL` to `"baseline"`, `"feature"`, `"spatiotemporal_gam"`, `"xgboost"`, `"xgboost_rotated"`, `"xgboost_community_comps"`, `"xgboost_matern_grf"`, `"lightgbm_community_comps"`, `"lightgbm_nearby_comps_safe"`, or `"convlstm_spatial"` to choose a model.
+- **`models.py`**: set `MODEL` to `"baseline"`, `"feature"`, `"spatiotemporal_gam"`, `"xgboost"`, `"xgboost_rotated"`, `"xgboost_community_comps"`, `"xgboost_matern_grf"`, `"xgboost_arima"`, `"xgboost_hashed_text"`, `"lightgbm_community_comps"`, `"lightgbm_nearby_comps_safe"`, or `"convlstm_spatial"` to choose a model.
   The GAM-style model mirrors the supplied `mgcv::bam` formula with spline bases and Ridge
   regularization; it approximates, but does not reproduce, `bam`'s REML smoothness selection.
-  XGBoost uses the same property, location, and time inputs and adds list price on the
-  list-aware track. The distance-based variants use same-type comparable sales within
+  XGBoost uses the same property, location, and time inputs. The default list-aware
+  model learns the sale-to-list-price ratio, then scales that prediction by list price;
+  off-market remains on the original sale-price target. The distance-based variants use same-type comparable sales within
   3 km; the community variant instead uses sales of the same type in the same community.
   Both calculate median price, median price per square foot, and count from sales before
   the home's listing month. The distance-based variant also includes nearest distance.
@@ -193,6 +198,13 @@ variant scored 12.01% off-market and 5.51% list-aware MAPE, effectively tying
 the default at those rounded scores; the unrounded scores moved slightly in
 opposite directions. Results are in
 `outputs/experiments/xgboost-arima-v1/`.
+
+The experimental `"xgboost_hashed_text"` model blends the community-comparable
+XGBoost predictions with a sparse Ridge model using 262,144 hashed remark
+unigram/bigram features plus the structured features. On the Dec 2025-May 2026
+walk-forward it scored 12.03% off-market and 6.01% list-aware MAPE, so it did
+not improve on the default. Results are in
+`outputs/experiments/xgboost-hashed-text-v2/`.
 
 To explore which words in listing remarks are associated with higher or lower
 prices after controlling for the structured property, location, and time features,

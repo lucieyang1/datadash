@@ -12,6 +12,7 @@ import pandas as pd
 from scipy import sparse
 from scipy.spatial import cKDTree
 from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.feature_extraction.text import HashingVectorizer
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 from sklearn.impute import SimpleImputer
@@ -35,11 +36,15 @@ def make_model(track):
     if MODEL == "xgboost_rotated":
         return RotatedCoordinateXGBoostModel(track)
     if MODEL == "xgboost_community_comps":
+        if track == "list_aware":
+            return ListAwareCommunityComparableXGBoostModel(track)
         return CommunityComparableXGBoostModel(track)
     if MODEL == "xgboost_matern_grf":
         return MaternSpatialXGBoostModel(track)
     if MODEL == "xgboost_arima":
         return ARIMATimeXGBoostModel(track)
+    if MODEL == "xgboost_hashed_text":
+        return HashedTextXGBoostModel(track)
     if MODEL == "lightgbm_community_comps":
         return CommunityComparableLightGBMModel(track)
     if MODEL == "lightgbm_nearby_comps_safe":
@@ -57,7 +62,8 @@ def make_model(track):
             f"Unknown model {MODEL!r}; choose 'baseline', 'feature', "
             "'spatiotemporal_gam', 'xgboost', 'xgboost_rotated', or "
             "'xgboost_community_comps', 'xgboost_matern_grf', "
-            "'xgboost_arima', 'lightgbm_community_comps', or "
+            "'xgboost_arima', 'xgboost_hashed_text', "
+            "'lightgbm_community_comps', or "
             "'lightgbm_nearby_comps_safe', or 'convlstm_spatial'."
         )
     if track == "list_aware":
@@ -330,6 +336,23 @@ class CommunityComparableXGBoostModel(RotatedCoordinateXGBoostModel):
         self.comparables = CommunityComparableFeatures()
 
 
+class ListAwareCommunityComparableXGBoostModel(CommunityComparableXGBoostModel):
+    """Predict sale-to-list ratio and scale it by the known list price."""
+
+    def fit(self, train):
+        self.comparables.fit(train)
+        sale_to_list_ratio = train["sold_price"] / train["list_price"]
+        self.model.fit(
+            self._design_matrix(train, fit=True),
+            np.log(sale_to_list_ratio),
+        )
+        return self
+
+    def predict(self, homes):
+        predicted_ratio = np.exp(self.model.predict(self._design_matrix(homes)))
+        return homes["list_price"].to_numpy(dtype=float) * predicted_ratio
+
+
 class MaternSpatialXGBoostModel(CommunityComparableXGBoostModel):
     """Full-data community-comparable boosting plus a binned Matérn spatial field."""
 
@@ -496,6 +519,67 @@ class ARIMATimeXGBoostModel(CommunityComparableXGBoostModel):
                     property_type, target_month
                 )
         return predictions * np.exp(self.arima_strength * changes)
+
+
+class HashedTextXGBoostModel(CommunityComparableXGBoostModel):
+    """Best boosted model blended with a high-dimensional sparse text model."""
+
+    text_dimensions = 2**18
+    text_strength = 0.2
+
+    def __init__(self, track, **kwargs):
+        super().__init__(track, **kwargs)
+        self.text_vectorizer = HashingVectorizer(
+            n_features=self.text_dimensions,
+            alternate_sign=False,
+            ngram_range=(1, 2),
+            norm="l2",
+            strip_accents="unicode",
+            stop_words="english",
+            token_pattern=r"(?u)\b\w\w+\b",
+        )
+        self.numeric_scaler = StandardScaler()
+        self.text_model = Ridge(
+            alpha=20.0,
+            solver="lsqr",
+            tol=1e-3,
+            max_iter=500,
+        )
+
+    def _text_design_matrix(self, homes, fit=False):
+        numeric, categories = self._values(homes)
+        if fit:
+            numeric_values = self.numeric_scaler.fit_transform(
+                self.numeric_imputer.transform(numeric)
+            )
+        else:
+            numeric_values = self.numeric_scaler.transform(
+                self.numeric_imputer.transform(numeric)
+            )
+        category_values = self.category_encoder.transform(categories)
+        remarks = homes.get("remarks", pd.Series("", index=homes.index))
+        text = self.text_vectorizer.transform(remarks.fillna("").astype(str))
+        return sparse.hstack([
+            sparse.csr_matrix(numeric_values, dtype=np.float32),
+            category_values,
+            text,
+        ], format="csr", dtype=np.float32)
+
+    def fit(self, train):
+        super().fit(train)
+        self.text_model.fit(
+            self._text_design_matrix(train, fit=True),
+            np.log(train["sold_price"]),
+        )
+        return self
+
+    def predict(self, homes):
+        boosted_log_price = np.log(super().predict(homes))
+        text_log_price = self.text_model.predict(self._text_design_matrix(homes))
+        return np.exp(
+            (1 - self.text_strength) * boosted_log_price
+            + self.text_strength * text_log_price
+        )
 
 
 class CommunityComparableLightGBMModel(RotatedCoordinateXGBoostModel):
