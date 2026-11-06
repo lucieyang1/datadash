@@ -9,37 +9,37 @@ the list-aware track.
 
 | Model / experiment | Off-market MdAPE | Off-market MAPE | List-aware MdAPE | List-aware MAPE | Notes |
 |---|---:|---:|---:|---:|---|
+| LightGBM, safe nearby comps | 9.26% | 12.22% | 4.42% | 5.54% | [report](outputs/experiments/lightgbm-nearby-comps-safe-v1/reports/validation_report.md) |
+| XGBoost + ARIMA time trend | 9.29% | 12.01% | 4.34% | 5.51% | Tied after rounding; [report](outputs/experiments/xgboost-arima-v1/reports/validation_report.md) |
 | XGBoost, community comps + list-price ratio | 9.31% | 12.01% | 4.27% | 5.34% | Current default; [report](outputs/experiments/xgboost-list-ratio-v1/reports/validation_report.md) |
 | XGBoost, community comps (sale-price target) | 9.31% | 12.01% | 4.37% | 5.51% | [report](outputs/experiments/xgboost-community-comps-v1/reports/validation_report.md) |
-| XGBoost + ARIMA time trend | 9.29% | 12.01% | 4.34% | 5.51% | Tied after rounding; [report](outputs/experiments/xgboost-arima-v1/reports/validation_report.md) |
 | XGBoost, Optuna tuned | 9.31% | 12.01% | 4.37% | 5.51% | [report](outputs/experiments/xgb-optuna-v1/reports/validation_report.md) |
-| LightGBM, community comps | 9.66% | 12.32% | 4.32% | 5.47% | [report](outputs/experiments/lightgbm-community-comps-v1/reports/validation_report.md) |
-| LightGBM, safe nearby comps | 9.26% | 12.22% | 4.42% | 5.54% | [report](outputs/experiments/lightgbm-nearby-comps-safe-v1/reports/validation_report.md) |
-| XGBoost, nearby comps | 9.43% | 12.51% | 4.43% | 5.51% | [report](outputs/experiments/xgboost-nearby-comps/reports/validation_report.md) |
-| XGBoost, safe nearby comps | 9.53% | 12.59% | 4.42% | 5.53% | [report](outputs/experiments/xgboost-nearby-comps-safe-v2/reports/validation_report.md) |
-| XGBoost, rotated coordinates | 9.48% | 12.55% | 4.40% | 5.54% | [report](outputs/experiments/xgboost-rotated-v1/reports/validation_report.md) |
-| XGBoost, basic | 10.84% | 13.77% | 4.47% | 5.59% | [report](outputs/experiments/xgboost/reports/validation_report.md) |
-| XGBoost, word features | 10.84% | 13.73% | 4.48% | 5.56% | [report](outputs/experiments/xgboost-wordfeatures/reports/validation_report.md) |
-| Feature model | 14.87% | 19.23% | 4.61% | 5.82% | [report](outputs/experiments/feature-model/reports/validation_report.md) |
-| Spatiotemporal GAM | 12.88% | 16.45% | 12.88% | 16.45% | [report](outputs/experiments/spatiotemporal-gam/reports/validation_report.md) |
-| ConvLSTM, 60k rows | 19.61% | 25.24% | 18.62% | 26.32% | [report](outputs/experiments/convlstm-spatial-60k-v1/reports/validation_report.md) |
-| ConvLSTM, full data | 15.12% | 18.11% | 12.87% | 16.16% | [report](outputs/experiments/convlstm-spatial-full-v1/reports/validation_report.md) |
-| ConvLSTM, initial run | 43.50% | 70.56% | 36.45% | 125.35% | [report](outputs/experiments/convlstm-spatial-v1/reports/validation_report.md) |
 | XGBoost + 262k hashed text features (Ridge) | 9.34% | 12.03% | 4.83% | 6.01% | Text branch did not improve overall; [report](outputs/experiments/xgboost-hashed-text-v2/reports/validation_report.md) |
-| XGBoost + hashed text (initial SGD) | 81.14% | 158.65% | 64.74% | 72.12% | Unstable first prototype; [report](outputs/experiments/xgboost-hashed-text-v1/reports/validation_report.md) |
-| XGBoost + Matérn GP (held-out residuals) | 10.44% | 13.29% | 4.46% | 5.64% | Worse than default; [report](outputs/experiments/xgboost-matern-grf-v1/reports/validation_report.md) |
+| XGBoost, nearby comps | 9.43% | 12.51% | 4.43% | 5.51% | [report](outputs/experiments/xgboost-nearby-comps/reports/validation_report.md) |
+| XGBoost, rotated coordinates | 9.48% | 12.55% | 4.40% | 5.54% | [report](outputs/experiments/xgboost-rotated-v1/reports/validation_report.md) |
+| XGBoost, safe nearby comps | 9.53% | 12.59% | 4.42% | 5.53% | [report](outputs/experiments/xgboost-nearby-comps-safe-v2/reports/validation_report.md) |
+| LightGBM, community comps | 9.66% | 12.32% | 4.32% | 5.47% | [report](outputs/experiments/lightgbm-community-comps-v1/reports/validation_report.md) |
 | XGBoost + Matérn GP (all-data residual field) | 10.13% | 13.44% | 6.42% | 8.02% | Worse than default; [report](outputs/experiments/xgboost-matern-grf-v2/reports/validation_report.md) |
+| XGBoost + Matérn GP (held-out residuals) | 10.44% | 13.29% | 4.46% | 5.64% | Worse than default; [report](outputs/experiments/xgboost-matern-grf-v1/reports/validation_report.md) |
+| XGBoost, word features | 10.84% | 13.73% | 4.48% | 5.56% | [report](outputs/experiments/xgboost-wordfeatures/reports/validation_report.md) |
+| XGBoost, basic | 10.84% | 13.77% | 4.47% | 5.59% | [report](outputs/experiments/xgboost/reports/validation_report.md) |
+| Spatiotemporal GAM | 12.88% | 16.45% | 12.88% | 16.45% | [report](outputs/experiments/spatiotemporal-gam/reports/validation_report.md) |
+| Feature model | 14.87% | 19.23% | 4.61% | 5.82% | [report](outputs/experiments/feature-model/reports/validation_report.md) |
+| ConvLSTM, full data | 15.12% | 18.11% | 12.87% | 16.16% | [report](outputs/experiments/convlstm-spatial-full-v1/reports/validation_report.md) |
+| ConvLSTM, 60k rows | 19.61% | 25.24% | 18.62% | 26.32% | [report](outputs/experiments/convlstm-spatial-60k-v1/reports/validation_report.md) |
+| ConvLSTM, initial run | 43.50% | 70.56% | 36.45% | 125.35% | [report](outputs/experiments/convlstm-spatial-v1/reports/validation_report.md) |
+| XGBoost + hashed text (initial SGD) | 81.14% | 158.65% | 64.74% | 72.12% | Unstable first prototype; [report](outputs/experiments/xgboost-hashed-text-v1/reports/validation_report.md) |
 
 Exploratory six-model ensemble scores below use the Aug 2025-May 2026 blend
 window, which was also used to choose blend weights; they are not unbiased
 walk-forward comparisons.
 
-| Ensemble experiment | Off-market MAPE | List-aware MAPE |
-|---|---:|---:|
-| Comparable features | 12.52% | 5.53% |
-| Engineered features | 12.47% | 5.43% |
-| TF-IDF remarks | 11.88% | 5.39% |
-| Market trends | 12.49% | 5.49% |
+| Ensemble experiment | Off-market MdAPE | Off-market MAPE | List-aware MdAPE | List-aware MAPE |
+|---|---:|---:|---:|---:|
+| TF-IDF remarks | 9.27% | 11.88% | 4.34% | 5.39% |
+| Engineered features | 9.51% | 12.47% | 4.36% | 5.43% |
+| Comparable features | 9.61% | 12.52% | 4.46% | 5.53% |
+| Market trends | 9.70% | 12.49% | 4.44% | 5.49% |
 
 Start with the case handout, [`handout.md`](handout.md), and the judging rubric, [`rubric.md`](rubric.md).
 
